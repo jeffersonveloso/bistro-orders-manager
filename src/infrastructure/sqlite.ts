@@ -1331,16 +1331,61 @@ function seedDemoOperationalScenarios(repository: ProductionRepository) {
   repository.startKitchenTicket("order_anota-104", "kitchen-1");
 }
 
+function seedDemoSyncExceptions(repository: SqliteProductionRepository) {
+  const changedDetectedAt = new Date(Date.now() - 5 * 60_000).toISOString();
+  const changedSeenAt = new Date(Date.now() - 2 * 60_000).toISOString();
+  const failedDetectedAt = new Date(Date.now() - 4 * 60_000).toISOString();
+  const failedSeenAt = new Date(Date.now() - 90_000).toISOString();
+
+  repository.openOrRefreshException({
+    provider: "anota_ai",
+    kind: "changed_externally",
+    externalOrderId: "anota-101",
+    orderId: "order_anota-101",
+    summary: "Pedido Pedido 101 divergiu externamente após a importação",
+    details: {
+      diffs: [
+        {
+          type: "quantity_changed",
+          externalItemId: "101-1",
+        },
+        {
+          type: "order_notes_changed",
+        },
+      ],
+    },
+    detectedAt: changedDetectedAt,
+    lastSeenAt: changedSeenAt,
+  });
+
+  repository.openOrRefreshException({
+    provider: "anota_ai",
+    kind: "ingestion_failed",
+    externalOrderId: "anota-999",
+    orderId: null,
+    summary: "Falha técnica na sincronização do pedido externo",
+    details: {
+      errorCode: "provider_fetch_failed",
+      errorMessage: "Pedido externo não pôde ser hidratado pelo provedor.",
+      stage: "fetch",
+    },
+    detectedAt: failedDetectedAt,
+    lastSeenAt: failedSeenAt,
+  });
+}
+
 function initializeRepository({
   applyDemoScenarios,
   db,
   importProviderOrders,
   provider,
+  seedDemoExceptions,
 }: {
   applyDemoScenarios: boolean;
   db: SqliteDatabase;
   importProviderOrders: boolean;
   provider: OrderProviderPort;
+  seedDemoExceptions: boolean;
 }) {
   migrate(db);
   seedStaticData(db);
@@ -1363,6 +1408,10 @@ function initializeRepository({
     seedDemoOperationalScenarios(nextRepository);
   }
 
+  if (seedDemoExceptions && importProviderOrders) {
+    seedDemoSyncExceptions(nextRepository);
+  }
+
   return nextRepository;
 }
 
@@ -1376,10 +1425,12 @@ export function createProductionTestContext({
   applyDemoScenarios = false,
   importProviderOrders = false,
   provider = createMockOrderProvider(),
+  seedDemoExceptions = false,
 }: {
   applyDemoScenarios?: boolean;
   importProviderOrders?: boolean;
   provider?: OrderProviderPort;
+  seedDemoExceptions?: boolean;
 } = {}): ProductionTestContext {
   const db = createDatabase(":memory:");
   const nextRepository = initializeRepository({
@@ -1387,6 +1438,7 @@ export function createProductionTestContext({
     db,
     importProviderOrders,
     provider,
+    seedDemoExceptions,
   });
 
   return {
@@ -1406,6 +1458,7 @@ export function getProductionRepository() {
       db: database,
       importProviderOrders: true,
       provider: createMockOrderProvider(),
+      seedDemoExceptions: true,
     });
   }
 
