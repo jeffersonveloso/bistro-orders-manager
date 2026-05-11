@@ -12,6 +12,7 @@ import type {
 } from "@/src/domain/production";
 import type {
   ProviderName,
+  ProviderOrderState,
   ProviderOrderSnapshot,
   SyncExceptionKind,
   SyncExceptionRecord,
@@ -27,6 +28,7 @@ import {
 } from "@/src/domain/split-order-service";
 
 type ProviderSyncRepositoryBundle = ProductionRepository & ProviderSyncRepository;
+const DEFAULT_RECONCILIATION_REPLAY_LIMIT = 50;
 
 interface CreateProviderSyncServiceOptions {
   provider: OrderSyncProviderPort;
@@ -100,6 +102,11 @@ interface RelevantChangeResult {
 interface ImportedOrderContext {
   aggregate: OrderAggregate;
   importedOrderId: string;
+}
+
+interface ReplayCandidate {
+  externalOrderId: string;
+  replayCursor: string;
 }
 
 export function createProviderSyncService(
@@ -227,17 +234,12 @@ export function createProviderSyncService(
             limit: input.limit,
           });
 
-          const confirmedExternalOrderIds = new Set(
-            confirmedCandidates.map((snapshot) => snapshot.externalOrderId),
-          );
-
-          // Imported orders must stay in the reconciliation safety net even
-          // after they leave the provider's confirmed lifecycle.
-          importedExternalOrderIdsToReplay = [
-            ...new Set(options.repository.listImportedExternalOrderIds()),
-          ].filter((externalOrderId) => {
-            return !confirmedExternalOrderIds.has(externalOrderId);
-          });
+          importedExternalOrderIdsToReplay =
+            selectImportedReplayExternalOrderIds({
+              confirmedCandidates,
+              input,
+              repository: options.repository,
+            });
           candidateCount =
             confirmedCandidates.length + importedExternalOrderIdsToReplay.length;
         }
@@ -1311,6 +1313,105 @@ function modifiersSignature(
 
 function buildModifierSortKey(modifier: SnapshotComparisonModifier) {
   return `${modifier.name}::${modifier.quantity ?? ""}::${modifier.notes ?? ""}`;
+}
+
+function selectImportedReplayExternalOrderIds({
+  confirmedCandidates,
+  input,
+  repository,
+}: {
+  confirmedCandidates: ProviderOrderSnapshot[];
+  input: ReconcileInput;
+  repository: ProviderSyncRepositoryBundle;
+}) {
+  const replayBudget = resolveReplayBudget({
+    confirmedCandidateCount: confirmedCandidates.length,
+    limit: input.limit,
+  });
+
+  if (replayBudget === 0) {
+    return [];
+  }
+
+  const confirmedExternalOrderIds = new Set(
+    confirmedCandidates.map((snapshot) => snapshot.externalOrderId),
+  );
+  const updatedSinceMs = parseTimestampMs(input.updatedSince);
+
+  return [...new Set(repository.listImportedExternalOrderIds())]
+    .filter((externalOrderId) => !confirmedExternalOrderIds.has(externalOrderId))
+    .map((externalOrderId) => {
+      const state = repository.getProviderOrder({
+        provider: input.provider,
+        externalOrderId,
+      });
+      const replayCursor = state ? selectReplayCursor(state) : null;
+
+      if (!replayCursor) {
+        return null;
+      }
+
+      const replayCursorMs = parseTimestampMs(replayCursor);
+
+      if (
+        updatedSinceMs !== null &&
+        replayCursorMs !== null &&
+        replayCursorMs < updatedSinceMs
+      ) {
+        return null;
+      }
+
+      return {
+        externalOrderId,
+        replayCursor,
+      } satisfies ReplayCandidate;
+    })
+    .filter((candidate): candidate is ReplayCandidate => candidate !== null)
+    .sort(compareReplayCandidatesDesc)
+    .slice(0, replayBudget)
+    .map((candidate) => candidate.externalOrderId);
+}
+
+function resolveReplayBudget({
+  confirmedCandidateCount,
+  limit,
+}: {
+  confirmedCandidateCount: number;
+  limit: number | undefined;
+}) {
+  if (typeof limit === "number") {
+    return Math.max(limit - confirmedCandidateCount, 0);
+  }
+
+  return DEFAULT_RECONCILIATION_REPLAY_LIMIT;
+}
+
+function selectReplayCursor(state: ProviderOrderState) {
+  return state.lastAppliedAt ?? state.lastSeenAt;
+}
+
+function compareReplayCandidatesDesc(
+  left: ReplayCandidate,
+  right: ReplayCandidate,
+) {
+  const leftTimestamp = parseTimestampMs(left.replayCursor) ?? 0;
+  const rightTimestamp = parseTimestampMs(right.replayCursor) ?? 0;
+
+  if (leftTimestamp === rightTimestamp) {
+    return left.externalOrderId.localeCompare(right.externalOrderId);
+  }
+
+  return rightTimestamp - leftTimestamp;
+}
+
+function parseTimestampMs(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const parsedValue = Date.parse(value);
+
+  return Number.isNaN(parsedValue) ? null : parsedValue;
 }
 
 function normalizeOptionalString(value: string | null | undefined) {

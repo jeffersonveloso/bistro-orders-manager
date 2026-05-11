@@ -160,6 +160,10 @@ function countRows(
   ).count;
 }
 
+function atTime(hour: number, minute: number, second = 0) {
+  return new Date(Date.UTC(2026, 4, 11, hour, minute, second)).toISOString();
+}
+
 describe("provider sync service", () => {
   it("imports a confirmed order exactly once even when duplicate webhook deliveries are received", async () => {
     const snapshot = createSnapshot("external-duplicate");
@@ -934,6 +938,160 @@ describe("provider sync service", () => {
         }),
       );
       expect(context.repository.listUnresolvedSyncExceptions()).toEqual([]);
+    } finally {
+      context.close();
+    }
+  });
+
+  it("scopes replay candidates to the reconciliation window and remaining limit budget", async () => {
+    const staleSnapshot = createSnapshot("external-replay-stale", {
+      providerUpdatedAt: atTime(12, 0),
+    });
+    const recentSnapshot = createSnapshot("external-replay-recent", {
+      providerUpdatedAt: atTime(12, 15),
+    });
+    const newestSnapshot = createSnapshot("external-replay-newest", {
+      providerUpdatedAt: atTime(12, 20),
+    });
+    const provider = createMutableSyncProvider([
+      staleSnapshot,
+      recentSnapshot,
+      newestSnapshot,
+    ]);
+    const context = createProductionTestContext();
+    let currentNow = atTime(12, 0, 1);
+    const service = createProviderSyncService({
+      provider,
+      repository: context.repository,
+      now: () => currentNow,
+    });
+
+    try {
+      currentNow = atTime(12, 0, 1);
+      await service.handleWebhook({
+        provider: "anota_ai",
+        deliveryKey: "delivery-replay-stale",
+        eventType: "order.confirmed",
+        externalOrderId: staleSnapshot.externalOrderId,
+        payload: { id: staleSnapshot.externalOrderId },
+      });
+      currentNow = atTime(12, 15, 1);
+      await service.handleWebhook({
+        provider: "anota_ai",
+        deliveryKey: "delivery-replay-recent",
+        eventType: "order.confirmed",
+        externalOrderId: recentSnapshot.externalOrderId,
+        payload: { id: recentSnapshot.externalOrderId },
+      });
+      currentNow = atTime(12, 20, 1);
+      await service.handleWebhook({
+        provider: "anota_ai",
+        deliveryKey: "delivery-replay-newest",
+        eventType: "order.confirmed",
+        externalOrderId: newestSnapshot.externalOrderId,
+        payload: { id: newestSnapshot.externalOrderId },
+      });
+
+      for (const snapshot of [
+        staleSnapshot,
+        recentSnapshot,
+        newestSnapshot,
+      ]) {
+        provider.setSnapshot(
+          createSnapshot(snapshot.externalOrderId, {
+            lifecycle: "canceled",
+            providerStatus: "CANCELED",
+            providerUpdatedAt: atTime(12, 45),
+          }),
+        );
+      }
+
+      currentNow = atTime(12, 30);
+      const reconciled = await service.reconcileConfirmedOrders({
+        provider: "anota_ai",
+        updatedSince: atTime(12, 10),
+        limit: 1,
+      });
+
+      expect(reconciled).toEqual(
+        expect.objectContaining({
+          status: "completed",
+          processed: 1,
+          openedExceptions: 1,
+          errorCount: 0,
+        }),
+      );
+      expect(context.repository.listUnresolvedSyncExceptions()).toEqual([
+        expect.objectContaining({
+          kind: "canceled_externally",
+          externalOrderId: newestSnapshot.externalOrderId,
+        }),
+      ]);
+    } finally {
+      context.close();
+    }
+  });
+
+  it("bounds replay safety-net work when historical imported orders fall out of confirmed listings", async () => {
+    const totalImportedOrders = 60;
+    const snapshots = Array.from({ length: totalImportedOrders }, (_, index) =>
+      createSnapshot(`external-bounded-${index}`, {
+        providerUpdatedAt: atTime(12, index),
+      }),
+    );
+    const provider = createMutableSyncProvider(snapshots);
+    const context = createProductionTestContext();
+    let currentNow = atTime(12, 0, 1);
+    const service = createProviderSyncService({
+      provider,
+      repository: context.repository,
+      now: () => currentNow,
+    });
+
+    try {
+      for (const [index, snapshot] of snapshots.entries()) {
+        currentNow = atTime(12, index, 1);
+        await service.handleWebhook({
+          provider: "anota_ai",
+          deliveryKey: `delivery-bounded-${index}`,
+          eventType: "order.confirmed",
+          externalOrderId: snapshot.externalOrderId,
+          payload: { id: snapshot.externalOrderId },
+        });
+        provider.setSnapshot(
+          createSnapshot(snapshot.externalOrderId, {
+            lifecycle: "canceled",
+            providerStatus: "CANCELED",
+            providerUpdatedAt: atTime(13, index),
+          }),
+        );
+      }
+
+      currentNow = atTime(14, 0);
+      const reconciled = await service.reconcileConfirmedOrders({
+        provider: "anota_ai",
+      });
+      const unresolvedExceptions = context.repository.listUnresolvedSyncExceptions();
+
+      expect(reconciled).toEqual(
+        expect.objectContaining({
+          status: "completed",
+          processed: 50,
+          openedExceptions: 50,
+          errorCount: 0,
+        }),
+      );
+      expect(unresolvedExceptions).toHaveLength(50);
+      expect(
+        unresolvedExceptions.some(
+          (exception) => exception.externalOrderId === "external-bounded-0",
+        ),
+      ).toBe(false);
+      expect(
+        unresolvedExceptions.some(
+          (exception) => exception.externalOrderId === "external-bounded-59",
+        ),
+      ).toBe(true);
     } finally {
       context.close();
     }
