@@ -67,10 +67,11 @@ describe("provider sync port contracts", () => {
     } satisfies OrderSyncProviderPort;
 
     const stateByOrderId = new Map<string, ProviderOrderState>();
+    const eventsByDeliveryKey = new Map<string, ReturnType<ProviderSyncRepository["recordInboundEvent"]>>();
 
     const repository = {
       recordInboundEvent(event: InboundProviderEvent) {
-        return {
+        const record = {
           id: "event-1",
           provider: event.provider,
           deliveryKey: event.deliveryKey,
@@ -84,6 +85,13 @@ describe("provider sync port contracts", () => {
           errorCode: null,
           errorMessage: null,
         };
+
+        eventsByDeliveryKey.set(`${event.provider}:${event.deliveryKey}`, record);
+
+        return record;
+      },
+      getInboundEventByDeliveryKey(input) {
+        return eventsByDeliveryKey.get(`${input.provider}:${input.deliveryKey}`);
       },
       startSyncRun(input) {
         return {

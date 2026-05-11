@@ -69,6 +69,10 @@ export interface ProductionRepository {
 
 export interface ProviderSyncRepository {
   recordInboundEvent(event: InboundProviderEvent): ProviderEventRecord;
+  getInboundEventByDeliveryKey(input: {
+    provider: InboundProviderEvent["provider"];
+    deliveryKey: string;
+  }): ProviderEventRecord | undefined;
   startSyncRun(input: StartSyncRunInput): SyncRunRecord;
   finishSyncRun(input: FinishSyncRunInput): void;
   getProviderOrder(

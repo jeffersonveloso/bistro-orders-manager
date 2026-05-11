@@ -114,8 +114,6 @@ export function createProviderSyncService(
         externalOrderId: normalizeOptionalString(input.externalOrderId),
         receivedAt: input.receivedAt ?? now(),
       };
-      let eventId: string | null = null;
-      let runId: string | null = null;
 
       try {
         const event = options.repository.recordInboundEvent({
@@ -126,101 +124,63 @@ export function createProviderSyncService(
           payload: normalizedInput.payload,
           receivedAt: normalizedInput.receivedAt,
         });
-        eventId = event.id;
-        const run = options.repository.startSyncRun({
-          provider: normalizedInput.provider,
-          trigger: "webhook",
-          candidateCount: 1,
-          startedAt: normalizedInput.receivedAt,
-          sourceEventId: event.id,
-        });
-        runId = run.id;
-
-        const result = await syncSingleExternalOrder({
-          context: {
-            provider: normalizedInput.provider,
-            sourceEventId: event.id,
-            syncedAt: now(),
-          },
+        return runWebhookSync({
           externalOrderId: normalizedInput.externalOrderId,
+          now,
           provider: options.provider,
+          providerName: normalizedInput.provider,
+          receivedAt: normalizedInput.receivedAt,
           repository: options.repository,
-        });
-
-        const status = result.technicalFailure ? "failed" : "completed";
-        const finishedAt = now();
-
-        options.repository.finishSyncRun({
-          syncRunId: run.id,
-          status,
-          finishedAt,
-          candidateCount: 1,
-          importedCount: result.importedCount,
-          ignoredCount: result.ignoredCount,
-          exceptionCount: result.exceptionCount,
-          errorCount: result.errorCount,
-          event: {
-            eventId: event.id,
-            processStatus: result.technicalFailure ? "failed" : "processed",
-            processedAt: finishedAt,
-            errorCode: result.technicalFailure ? "ingestion_failed" : null,
-            errorMessage:
-              result.technicalFailure && result.exceptionKind
-                ? `Sync failed with ${result.exceptionKind}`
-                : null,
+          sourceEvent: {
+            externalOrderId: event.externalOrderId,
+            id: event.id,
           },
         });
-
-        return {
-          runId: run.id,
-          eventId: event.id,
-          status,
-          outcome: result.outcome,
-          externalOrderId: result.externalOrderId,
-          orderId: result.orderId,
-          exceptionId: result.exceptionId,
-          exceptionKind: result.exceptionKind,
-        };
       } catch (error) {
-        if (isUniqueConstraintError(error) && !runId) {
-          const importedOrder = normalizedInput.externalOrderId
-            ? findImportedOrderByExternalId(
-                options.repository,
-                normalizedInput.provider,
-                normalizedInput.externalOrderId,
-              )
-            : null;
+        if (isUniqueConstraintError(error)) {
+          const existingEvent = options.repository.getInboundEventByDeliveryKey({
+            provider: normalizedInput.provider,
+            deliveryKey: normalizedInput.deliveryKey,
+          });
 
-          return {
-            runId: null,
-            eventId: null,
-            status: "completed",
-            outcome: "duplicate_ignored",
-            externalOrderId: normalizedInput.externalOrderId,
-            orderId: importedOrder?.importedOrderId ?? null,
-            exceptionId: null,
-            exceptionKind: null,
-          };
-        }
+          if (!existingEvent) {
+            throw error;
+          }
 
-        if (runId && eventId) {
-          const finishedAt = now();
+          if (existingEvent.processStatus === "processed") {
+            const externalOrderId =
+              normalizedInput.externalOrderId ?? existingEvent.externalOrderId;
+            const importedOrder = externalOrderId
+              ? findImportedOrderByExternalId(
+                  options.repository,
+                  normalizedInput.provider,
+                  externalOrderId,
+                )
+              : null;
 
-          options.repository.finishSyncRun({
-            syncRunId: runId,
-            status: "failed",
-            finishedAt,
-            candidateCount: 1,
-            importedCount: 0,
-            ignoredCount: 0,
-            exceptionCount: 0,
-            errorCount: 1,
-            event: {
-              eventId,
-              processStatus: "failed",
-              processedAt: finishedAt,
-              errorCode: "sync_apply_failed",
-              errorMessage: extractErrorMessage(error),
+            return {
+              runId: null,
+              eventId: null,
+              status: "completed",
+              outcome: "duplicate_ignored",
+              externalOrderId,
+              orderId: importedOrder?.importedOrderId ?? null,
+              exceptionId: null,
+              exceptionKind: null,
+            };
+          }
+
+          return runWebhookSync({
+            externalOrderId:
+              normalizedInput.externalOrderId ?? existingEvent.externalOrderId,
+            now,
+            provider: options.provider,
+            providerName: normalizedInput.provider,
+            receivedAt: normalizedInput.receivedAt,
+            repository: options.repository,
+            sourceEvent: {
+              externalOrderId: existingEvent.externalOrderId,
+              id: existingEvent.id,
             },
           });
         }
@@ -235,29 +195,53 @@ export function createProviderSyncService(
       const replayExternalOrderId = normalizeOptionalString(input.externalOrderId);
       const startedAt = now();
       const trigger = replayExternalOrderId ? "replay" : "reconciliation";
-
-      const candidates = replayExternalOrderId
-        ? []
-        : await options.provider.listConfirmedOrders({
-            updatedSince: input.updatedSince,
-            limit: input.limit,
-          });
-      const candidateCount = replayExternalOrderId ? 1 : candidates.length;
       const run = options.repository.startSyncRun({
         provider: input.provider,
         trigger,
-        candidateCount,
+        candidateCount: replayExternalOrderId ? 1 : 0,
         startedAt,
       });
 
+      let confirmedCandidates: ProviderOrderSnapshot[] = [];
+      let importedExternalOrderIdsToReplay: string[] = [];
+      let candidateCount = replayExternalOrderId ? 1 : 0;
       let processed = 0;
       let imported = 0;
       let ignored = 0;
       let openedExceptions = 0;
       let resolvedExceptions = 0;
       let errorCount = 0;
+      const applyResult = (result: CandidateResult) => {
+        processed += 1;
+        imported += result.importedCount;
+        ignored += result.ignoredCount;
+        openedExceptions += result.exceptionCount;
+        resolvedExceptions += result.resolvedExceptionCount;
+        errorCount += result.errorCount;
+      };
 
       try {
+        if (!replayExternalOrderId) {
+          confirmedCandidates = await options.provider.listConfirmedOrders({
+            updatedSince: input.updatedSince,
+            limit: input.limit,
+          });
+
+          const confirmedExternalOrderIds = new Set(
+            confirmedCandidates.map((snapshot) => snapshot.externalOrderId),
+          );
+
+          // Imported orders must stay in the reconciliation safety net even
+          // after they leave the provider's confirmed lifecycle.
+          importedExternalOrderIdsToReplay = [
+            ...new Set(options.repository.listImportedExternalOrderIds()),
+          ].filter((externalOrderId) => {
+            return !confirmedExternalOrderIds.has(externalOrderId);
+          });
+          candidateCount =
+            confirmedCandidates.length + importedExternalOrderIdsToReplay.length;
+        }
+
         if (replayExternalOrderId) {
           const result = await syncSingleExternalOrder({
             context: {
@@ -270,14 +254,9 @@ export function createProviderSyncService(
             repository: options.repository,
           });
 
-          processed += 1;
-          imported += result.importedCount;
-          ignored += result.ignoredCount;
-          openedExceptions += result.exceptionCount;
-          resolvedExceptions += result.resolvedExceptionCount;
-          errorCount += result.errorCount;
+          applyResult(result);
         } else {
-          for (const snapshot of candidates) {
+          for (const snapshot of confirmedCandidates) {
             const result = syncCanonicalSnapshot({
               context: {
                 provider: input.provider,
@@ -289,12 +268,22 @@ export function createProviderSyncService(
               snapshot,
             });
 
-            processed += 1;
-            imported += result.importedCount;
-            ignored += result.ignoredCount;
-            openedExceptions += result.exceptionCount;
-            resolvedExceptions += result.resolvedExceptionCount;
-            errorCount += result.errorCount;
+            applyResult(result);
+          }
+
+          for (const externalOrderId of importedExternalOrderIdsToReplay) {
+            const result = await syncSingleExternalOrder({
+              context: {
+                provider: input.provider,
+                sourceEventId: null,
+                syncedAt: now(),
+              },
+              externalOrderId,
+              provider: options.provider,
+              repository: options.repository,
+            });
+
+            applyResult(result);
           }
         }
       } catch (error) {
@@ -344,6 +333,105 @@ export function createProviderSyncService(
       });
     },
   };
+}
+
+async function runWebhookSync({
+  externalOrderId,
+  now,
+  provider,
+  providerName,
+  receivedAt,
+  repository,
+  sourceEvent,
+}: {
+  externalOrderId: string | null;
+  now: () => string;
+  provider: OrderSyncProviderPort;
+  providerName: ProviderName;
+  receivedAt: string;
+  repository: ProviderSyncRepositoryBundle;
+  sourceEvent: {
+    id: string;
+    externalOrderId: string | null;
+  };
+}): Promise<WebhookProcessResult> {
+  const run = repository.startSyncRun({
+    provider: providerName,
+    trigger: "webhook",
+    candidateCount: 1,
+    startedAt: receivedAt,
+    sourceEventId: sourceEvent.id,
+  });
+
+  try {
+    const result = await syncSingleExternalOrder({
+      context: {
+        provider: providerName,
+        sourceEventId: sourceEvent.id,
+        syncedAt: now(),
+      },
+      externalOrderId: externalOrderId ?? sourceEvent.externalOrderId,
+      provider,
+      repository,
+    });
+
+    const status = result.technicalFailure ? "failed" : "completed";
+    const finishedAt = now();
+
+    repository.finishSyncRun({
+      syncRunId: run.id,
+      status,
+      finishedAt,
+      candidateCount: 1,
+      importedCount: result.importedCount,
+      ignoredCount: result.ignoredCount,
+      exceptionCount: result.exceptionCount,
+      errorCount: result.errorCount,
+      event: {
+        eventId: sourceEvent.id,
+        processStatus: result.technicalFailure ? "failed" : "processed",
+        processedAt: finishedAt,
+        errorCode: result.technicalFailure ? "ingestion_failed" : null,
+        errorMessage:
+          result.technicalFailure && result.exceptionKind
+            ? `Sync failed with ${result.exceptionKind}`
+            : null,
+      },
+    });
+
+    return {
+      runId: run.id,
+      eventId: sourceEvent.id,
+      status,
+      outcome: result.outcome,
+      externalOrderId: result.externalOrderId,
+      orderId: result.orderId,
+      exceptionId: result.exceptionId,
+      exceptionKind: result.exceptionKind,
+    };
+  } catch (error) {
+    const finishedAt = now();
+
+    repository.finishSyncRun({
+      syncRunId: run.id,
+      status: "failed",
+      finishedAt,
+      candidateCount: 1,
+      importedCount: 0,
+      ignoredCount: 0,
+      exceptionCount: 0,
+      errorCount: 1,
+      event: {
+        eventId: sourceEvent.id,
+        processStatus: "failed",
+        processedAt: finishedAt,
+        errorCode: "sync_apply_failed",
+        errorMessage: extractErrorMessage(error),
+      },
+    });
+
+    throw error;
+  }
 }
 
 async function syncSingleExternalOrder({

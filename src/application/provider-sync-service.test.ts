@@ -49,8 +49,10 @@ function cloneSnapshot(snapshot: ProviderOrderSnapshot) {
 function createMutableSyncProvider(
   initialSnapshots: ProviderOrderSnapshot[],
 ): OrderSyncProviderPort & {
+  clearListFailure(): void;
   clearFetchFailure(externalOrderId: string): void;
   setFetchFailure(externalOrderId: string, error: Error): void;
+  setListFailure(error: Error): void;
   setSnapshot(snapshot: ProviderOrderSnapshot): void;
 } {
   const snapshots = new Map(
@@ -60,6 +62,7 @@ function createMutableSyncProvider(
     ]),
   );
   const fetchFailures = new Map<string, Error>();
+  let listFailure: Error | null = null;
 
   return {
     providerName() {
@@ -77,6 +80,10 @@ function createMutableSyncProvider(
       return snapshot ? cloneSnapshot(snapshot) : null;
     },
     async listConfirmedOrders(input) {
+      if (listFailure) {
+        throw listFailure;
+      }
+
       const updatedSince = input.updatedSince
         ? Date.parse(input.updatedSince)
         : undefined;
@@ -129,6 +136,12 @@ function createMutableSyncProvider(
     },
     clearFetchFailure(externalOrderId) {
       fetchFailures.delete(externalOrderId);
+    },
+    setListFailure(error) {
+      listFailure = error;
+    },
+    clearListFailure() {
+      listFailure = null;
     },
     setSnapshot(snapshot) {
       snapshots.set(snapshot.externalOrderId, cloneSnapshot(snapshot));
@@ -191,6 +204,83 @@ describe("provider sync service", () => {
       expect(countRows(context, "provider_events")).toBe(1);
       expect(countRows(context, "sync_runs")).toBe(1);
       expect(countRows(context, "provider_orders")).toBe(1);
+    } finally {
+      context.close();
+    }
+  });
+
+  it("retries duplicate webhook deliveries when the persisted event previously failed", async () => {
+    const snapshot = createSnapshot("external-duplicate-retry");
+    const provider = createMutableSyncProvider([snapshot]);
+    provider.setFetchFailure(
+      snapshot.externalOrderId,
+      new Error("temporary upstream failure"),
+    );
+    const context = createProductionTestContext();
+    const service = createProviderSyncService({
+      provider,
+      repository: context.repository,
+    });
+
+    try {
+      const firstResult = await service.handleWebhook({
+        provider: "anota_ai",
+        deliveryKey: "delivery-retry",
+        eventType: "order.confirmed",
+        externalOrderId: snapshot.externalOrderId,
+        payload: { id: snapshot.externalOrderId },
+      });
+
+      provider.clearFetchFailure(snapshot.externalOrderId);
+
+      const retryResult = await service.handleWebhook({
+        provider: "anota_ai",
+        deliveryKey: "delivery-retry",
+        eventType: "order.confirmed",
+        externalOrderId: snapshot.externalOrderId,
+        payload: { id: snapshot.externalOrderId },
+      });
+      const persistedEvent = context.database
+        .prepare(
+          `
+            SELECT
+              id,
+              process_status as processStatus,
+              sync_run_id as syncRunId
+            FROM provider_events
+            WHERE provider = ? AND delivery_key = ?
+          `,
+        )
+        .get("anota_ai", "delivery-retry") as {
+        id: string;
+        processStatus: string;
+        syncRunId: string | null;
+      };
+
+      expect(firstResult).toEqual(
+        expect.objectContaining({
+          status: "failed",
+          outcome: "exception_opened",
+          exceptionKind: "ingestion_failed",
+        }),
+      );
+      expect(retryResult).toEqual(
+        expect.objectContaining({
+          status: "completed",
+          outcome: "imported",
+          eventId: firstResult.eventId,
+        }),
+      );
+      expect(retryResult.runId).not.toBe(firstResult.runId);
+      expect(context.repository.listOrderAggregates()).toHaveLength(1);
+      expect(context.repository.listUnresolvedSyncExceptions()).toEqual([]);
+      expect(countRows(context, "provider_events")).toBe(1);
+      expect(countRows(context, "sync_runs")).toBe(2);
+      expect(persistedEvent).toEqual({
+        id: firstResult.eventId,
+        processStatus: "processed",
+        syncRunId: retryResult.runId,
+      });
     } finally {
       context.close();
     }
@@ -483,6 +573,56 @@ describe("provider sync service", () => {
         }),
       );
       expect(afterCancellation).toEqual(beforeCancellation);
+    } finally {
+      context.close();
+    }
+  });
+
+  it("reconciles imported orders that disappeared from confirmed listings and opens canceled_externally", async () => {
+    const snapshot = createSnapshot("external-reconcile-canceled");
+    const provider = createMutableSyncProvider([snapshot]);
+    const context = createProductionTestContext();
+    const service = createProviderSyncService({
+      provider,
+      repository: context.repository,
+    });
+
+    try {
+      const imported = await service.handleWebhook({
+        provider: "anota_ai",
+        deliveryKey: "delivery-reconcile-canceled-1",
+        eventType: "order.confirmed",
+        externalOrderId: snapshot.externalOrderId,
+        payload: { id: snapshot.externalOrderId },
+      });
+
+      provider.setSnapshot(
+        createSnapshot("external-reconcile-canceled", {
+          lifecycle: "canceled",
+          providerStatus: "CANCELED",
+          providerUpdatedAt: "2026-05-11T12:10:00.000Z",
+        }),
+      );
+
+      const reconciled = await service.reconcileConfirmedOrders({
+        provider: "anota_ai",
+      });
+
+      expect(reconciled).toEqual(
+        expect.objectContaining({
+          status: "completed",
+          processed: 1,
+          openedExceptions: 1,
+          errorCount: 0,
+        }),
+      );
+      expect(context.repository.listUnresolvedSyncExceptions()).toEqual([
+        expect.objectContaining({
+          kind: "canceled_externally",
+          externalOrderId: snapshot.externalOrderId,
+          orderId: imported.orderId,
+        }),
+      ]);
     } finally {
       context.close();
     }
@@ -794,6 +934,52 @@ describe("provider sync service", () => {
         }),
       );
       expect(context.repository.listUnresolvedSyncExceptions()).toEqual([]);
+    } finally {
+      context.close();
+    }
+  });
+
+  it("creates a failed reconciliation run when the provider listing throws before candidate processing", async () => {
+    const provider = createMutableSyncProvider([]);
+    provider.setListFailure(new Error("provider listing unavailable"));
+    const context = createProductionTestContext();
+    const service = createProviderSyncService({
+      provider,
+      repository: context.repository,
+    });
+
+    try {
+      await expect(
+        service.reconcileConfirmedOrders({
+          provider: "anota_ai",
+        }),
+      ).rejects.toThrow("provider listing unavailable");
+
+      expect(
+        context.database
+          .prepare(
+            `
+              SELECT
+                status,
+                candidate_count as candidateCount,
+                imported_count as importedCount,
+                ignored_count as ignoredCount,
+                exception_count as exceptionCount,
+                error_count as errorCount
+              FROM sync_runs
+            `,
+          )
+          .all(),
+      ).toEqual([
+        {
+          status: "failed",
+          candidateCount: 0,
+          importedCount: 0,
+          ignoredCount: 0,
+          exceptionCount: 0,
+          errorCount: 1,
+        },
+      ]);
     } finally {
       context.close();
     }

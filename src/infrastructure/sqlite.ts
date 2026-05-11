@@ -659,6 +659,24 @@ function createProductionRepository(db: SqliteDatabase): SqliteProductionReposit
     WHERE id = ?
   `);
 
+  const selectProviderEventByDeliveryKey = db.prepare(`
+    SELECT
+      id,
+      provider,
+      delivery_key as deliveryKey,
+      event_type as eventType,
+      external_order_id as externalOrderId,
+      payload_json as payloadJson,
+      received_at as receivedAt,
+      processed_at as processedAt,
+      process_status as processStatus,
+      sync_run_id as syncRunId,
+      error_code as errorCode,
+      error_message as errorMessage
+    FROM provider_events
+    WHERE provider = @provider AND delivery_key = @deliveryKey
+  `);
+
   const insertSyncRun = db.prepare(`
     INSERT INTO sync_runs (
       id,
@@ -1116,6 +1134,14 @@ function createProductionRepository(db: SqliteDatabase): SqliteProductionReposit
       return mapProviderEventRow(
         selectProviderEventById.get(rowId) as ProviderEventRow,
       );
+    },
+    getInboundEventByDeliveryKey(input) {
+      const row = selectProviderEventByDeliveryKey.get({
+        provider: input.provider,
+        deliveryKey: input.deliveryKey,
+      }) as ProviderEventRow | undefined;
+
+      return row ? mapProviderEventRow(row) : undefined;
     },
     startSyncRun(input) {
       const rowId = crypto.randomUUID();
