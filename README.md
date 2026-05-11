@@ -105,6 +105,7 @@ Mode selection:
   - enables the real Anota AI adapter
   - requires `BISTRO_ANOTA_AI_TOKEN`
   - expects shared secrets for webhook and reconciliation entry points
+  - starts from a clean board on a fresh SQLite file instead of importing demo orders
 
 Runtime contract for live mode:
 
@@ -134,8 +135,13 @@ On startup it will:
 
 1. create tables if needed
 2. seed kitchens and menu item mappings
-3. import demo orders through the mock provider adapter
-4. apply demo operational scenarios for acceptance coverage
+3. in `mock` mode, import demo orders through the mock provider adapter
+4. in `mock` mode, apply demo operational scenarios and demo sync exceptions for acceptance coverage
+
+Boot behavior by provider mode:
+
+- `mock`: seeds demo production data for local walkthroughs and acceptance coverage
+- `anota_ai`: keeps only kitchens and menu mappings seeded so live or fake-provider sync can populate the board
 
 ## Routes
 

@@ -1,0 +1,36 @@
+{
+  "name": "webhook-change-import-204",
+  "startedAt": "2026-05-11T20:08:01.314Z",
+  "endedAt": "2026-05-11T20:08:01.318Z",
+  "method": "POST",
+  "url": "http://127.0.0.1:3100/api/integrations/anota-ai/webhook",
+  "requestHeaders": {
+    "Content-Type": "application/json",
+    "x-bistro-anota-webhook-secret": "qa-webhook-secret"
+  },
+  "requestBody": {
+    "deliveryKey": "qa-delivery-204-import",
+    "eventType": "order.confirmed",
+    "externalOrderId": "qa-change-204"
+  },
+  "status": 200,
+  "responseHeaders": {
+    "cache-control": "no-store",
+    "connection": "keep-alive",
+    "content-type": "application/json",
+    "date": "Mon, 11 May 2026 20:08:01 GMT",
+    "keep-alive": "timeout=5",
+    "transfer-encoding": "chunked",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch"
+  },
+  "body": {
+    "runId": "7b801970-17f2-4524-b0da-907a5d8e85cd",
+    "eventId": "44af9c9a-228f-4735-b01d-80f450b08e91",
+    "status": "completed",
+    "outcome": "imported",
+    "externalOrderId": "qa-change-204",
+    "orderId": "order_qa-change-204",
+    "exceptionId": null,
+    "exceptionKind": null
+  }
+}

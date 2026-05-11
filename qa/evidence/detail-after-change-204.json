@@ -1,0 +1,84 @@
+{
+  "name": "detail-after-change-204",
+  "startedAt": "2026-05-11T20:08:01.326Z",
+  "endedAt": "2026-05-11T20:08:01.328Z",
+  "method": "GET",
+  "url": "http://127.0.0.1:3100/api/orders/order_qa-change-204?kitchen=kitchen-1",
+  "requestHeaders": {},
+  "requestBody": null,
+  "status": 200,
+  "responseHeaders": {
+    "cache-control": "no-store",
+    "connection": "keep-alive",
+    "content-type": "application/json",
+    "date": "Mon, 11 May 2026 20:08:01 GMT",
+    "keep-alive": "timeout=5",
+    "transfer-encoding": "chunked",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch"
+  },
+  "body": {
+    "orderId": "order_qa-change-204",
+    "reference": "Pedido QA 204",
+    "customerName": "Mesa QA 204",
+    "focusKitchenId": "kitchen-1",
+    "focusKitchenName": "Kitchen 1",
+    "focusTicketStatus": "new",
+    "focusKitchenStatus": "Novo",
+    "orderStatusKey": "new",
+    "orderStatus": "Novo",
+    "focusItems": [
+      {
+        "id": "order_qa-change-204__qa-change-204-drink",
+        "name": "Café gelado",
+        "quantity": 1,
+        "notes": null,
+        "status": "new"
+      }
+    ],
+    "otherKitchen": {
+      "id": "kitchen-2",
+      "name": "Kitchen 2",
+      "statusKey": "new",
+      "status": "Novo",
+      "items": [
+        {
+          "id": "order_qa-change-204__qa-change-204-bakery",
+          "name": "Croissant",
+          "quantity": 1,
+          "notes": null,
+          "status": "new"
+        }
+      ]
+    },
+    "syncException": {
+      "id": "fc3d88f6-1b76-4739-87c8-7e4358b000df",
+      "kind": "changed_externally",
+      "status": "open",
+      "label": "Mudança externa",
+      "statusLabel": "Ação pendente",
+      "summary": "Pedido QA 204 divergiu externamente após a importação",
+      "detail": "Alterações detectadas: quantidade alterada, observação do pedido alterada.",
+      "orderId": "order_qa-change-204",
+      "externalOrderId": "qa-change-204",
+      "detectedAt": "2026-05-11T20:08:01.323Z",
+      "lastSeenAt": "2026-05-11T20:08:01.323Z",
+      "acknowledgedAt": null,
+      "acknowledgedVia": null,
+      "resolvedAt": null,
+      "resolvedVia": null,
+      "resolutionNote": null
+    },
+    "syncTrail": [
+      {
+        "id": "fc3d88f6-1b76-4739-87c8-7e4358b000df:detected",
+        "exceptionId": "fc3d88f6-1b76-4739-87c8-7e4358b000df",
+        "event": "detected",
+        "label": "Mudança externa",
+        "summary": "Pedido QA 204 divergiu externamente após a importação",
+        "detail": "Alterações detectadas: quantidade alterada, observação do pedido alterada.",
+        "occurredAt": "2026-05-11T20:08:01.323Z",
+        "actor": "Integração externa"
+      }
+    ]
+  }
+}

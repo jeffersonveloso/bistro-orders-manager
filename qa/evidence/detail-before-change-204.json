@@ -1,0 +1,56 @@
+{
+  "name": "detail-before-change-204",
+  "startedAt": "2026-05-11T20:08:01.319Z",
+  "endedAt": "2026-05-11T20:08:01.320Z",
+  "method": "GET",
+  "url": "http://127.0.0.1:3100/api/orders/order_qa-change-204?kitchen=kitchen-1",
+  "requestHeaders": {},
+  "requestBody": null,
+  "status": 200,
+  "responseHeaders": {
+    "cache-control": "no-store",
+    "connection": "keep-alive",
+    "content-type": "application/json",
+    "date": "Mon, 11 May 2026 20:08:01 GMT",
+    "keep-alive": "timeout=5",
+    "transfer-encoding": "chunked",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch"
+  },
+  "body": {
+    "orderId": "order_qa-change-204",
+    "reference": "Pedido QA 204",
+    "customerName": "Mesa QA 204",
+    "focusKitchenId": "kitchen-1",
+    "focusKitchenName": "Kitchen 1",
+    "focusTicketStatus": "new",
+    "focusKitchenStatus": "Novo",
+    "orderStatusKey": "new",
+    "orderStatus": "Novo",
+    "focusItems": [
+      {
+        "id": "order_qa-change-204__qa-change-204-drink",
+        "name": "Café gelado",
+        "quantity": 1,
+        "notes": null,
+        "status": "new"
+      }
+    ],
+    "otherKitchen": {
+      "id": "kitchen-2",
+      "name": "Kitchen 2",
+      "statusKey": "new",
+      "status": "Novo",
+      "items": [
+        {
+          "id": "order_qa-change-204__qa-change-204-bakery",
+          "name": "Croissant",
+          "quantity": 1,
+          "notes": null,
+          "status": "new"
+        }
+      ]
+    },
+    "syncException": null,
+    "syncTrail": []
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "name": "webhook-cancel-import-205",
+  "startedAt": "2026-05-11T20:08:01.329Z",
+  "endedAt": "2026-05-11T20:08:01.333Z",
+  "method": "POST",
+  "url": "http://127.0.0.1:3100/api/integrations/anota-ai/webhook",
+  "requestHeaders": {
+    "Content-Type": "application/json",
+    "x-bistro-anota-webhook-secret": "qa-webhook-secret"
+  },
+  "requestBody": {
+    "deliveryKey": "qa-delivery-205-import",
+    "eventType": "order.confirmed",
+    "externalOrderId": "qa-cancel-205"
+  },
+  "status": 200,
+  "responseHeaders": {
+    "cache-control": "no-store",
+    "connection": "keep-alive",
+    "content-type": "application/json",
+    "date": "Mon, 11 May 2026 20:08:01 GMT",
+    "keep-alive": "timeout=5",
+    "transfer-encoding": "chunked",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch"
+  },
+  "body": {
+    "runId": "ff264313-d387-4421-b634-db9c825cf9c6",
+    "eventId": "31664614-5d35-49eb-98e4-7a5796804cce",
+    "status": "completed",
+    "outcome": "imported",
+    "externalOrderId": "qa-cancel-205",
+    "orderId": "order_qa-cancel-205",
+    "exceptionId": null,
+    "exceptionKind": null
+  }
+}

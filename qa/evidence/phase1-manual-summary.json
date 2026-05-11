@@ -1,0 +1,46 @@
+{
+  "executedAt": "2026-05-11T20:08:01.179Z",
+  "scenarios": {
+    "live_bootstrap": {
+      "openSyncExceptions": 0,
+      "activeOrders": 0
+    },
+    "webhook_duplicate": {
+      "importedOutcome": "imported",
+      "duplicateOutcome": "duplicate_ignored",
+      "orderId": "order_qa-import-201"
+    },
+    "missing_mapping_replay": {
+      "initialOutcome": "exception_opened",
+      "replayImported": 1,
+      "replayResolvedExceptions": 1
+    },
+    "ingestion_failed_replay": {
+      "failureStatus": 500,
+      "replayImported": 1,
+      "replayResolvedExceptions": 1
+    },
+    "changed_externally": {
+      "openedExceptions": 1,
+      "preservedQuantity": 1,
+      "syncExceptionStatus": "open",
+      "syncExceptionId": "fc3d88f6-1b76-4739-87c8-7e4358b000df"
+    },
+    "canceled_externally": {
+      "openedExceptions": 1,
+      "preservedQuantity": 1
+    },
+    "reconciliation_list": {
+      "imported": 1,
+      "processed": 1,
+      "candidateCount": null
+    },
+    "salon_acknowledgement": {
+      "acknowledgedStatus": "acknowledged",
+      "syncTrailEvents": [
+        "acknowledged",
+        "detected"
+      ]
+    }
+  }
+}

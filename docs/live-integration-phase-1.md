@@ -31,6 +31,11 @@ Phase 1 does **not** cover:
 
 If any live-mode prerequisite is missing, keep `BISTRO_ORDER_SYNC_PROVIDER_MODE=mock` and continue using the seeded local flow instead of partially enabling the provider integration.
 
+Runtime bootstrap behavior:
+
+- `mock` mode boots with seeded demo orders, demo operational progress, and demo sync exceptions for local walkthroughs.
+- `anota_ai` mode boots a fresh production board on a new SQLite file and keeps only kitchens plus menu mappings seeded.
+
 ## Startup And Rollout Prerequisites
 
 Before enabling `anota_ai` mode:

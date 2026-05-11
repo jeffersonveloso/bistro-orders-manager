@@ -38,6 +38,7 @@ import {
 } from "@/src/domain/provider-sync";
 import type { SplitOrderResult } from "@/src/domain/split-order-service";
 import { createMockOrderProvider } from "@/src/infrastructure/mock-order-provider";
+import { parseOrderSyncProviderMode } from "@/src/infrastructure/order-provider-factory";
 
 type SqliteDatabase = InstanceType<typeof BetterSqlite3>;
 export type SqliteProductionRepository = ProductionRepository &
@@ -1450,17 +1451,43 @@ export function createProductionTestContext({
   };
 }
 
+function getRuntimeRepositoryConfig(env: NodeJS.ProcessEnv = process.env) {
+  const mode = parseOrderSyncProviderMode(env.BISTRO_ORDER_SYNC_PROVIDER_MODE) ?? "mock";
+
+  if (mode === "anota_ai") {
+    return {
+      applyDemoScenarios: false,
+      importProviderOrders: false,
+      provider: createMockOrderProvider(),
+      seedDemoExceptions: false,
+    } as const;
+  }
+
+  return {
+    applyDemoScenarios: true,
+    importProviderOrders: true,
+    provider: createMockOrderProvider(),
+    seedDemoExceptions: true,
+  } as const;
+}
+
 export function getProductionRepository() {
   if (!repository) {
     database = createDatabase(getConfiguredDatabasePath());
     repository = initializeRepository({
-      applyDemoScenarios: true,
       db: database,
-      importProviderOrders: true,
-      provider: createMockOrderProvider(),
-      seedDemoExceptions: true,
+      ...getRuntimeRepositoryConfig(),
     });
   }
 
   return repository;
+}
+
+export function resetProductionRepositoryForTests() {
+  if (database) {
+    database.close();
+  }
+
+  database = undefined;
+  repository = undefined;
 }

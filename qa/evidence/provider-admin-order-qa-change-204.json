@@ -1,0 +1,74 @@
+{
+  "name": "provider-admin-order-qa-change-204",
+  "startedAt": "2026-05-11T20:08:01.321Z",
+  "endedAt": "2026-05-11T20:08:01.321Z",
+  "method": "POST",
+  "url": "http://127.0.0.1:4010/__admin/order",
+  "requestHeaders": {
+    "Content-Type": "application/json"
+  },
+  "requestBody": {
+    "id": "qa-change-204",
+    "reference": "Pedido QA 204",
+    "customerName": "Mesa QA 204",
+    "check": 1,
+    "updatedAt": "2026-05-11T20:09:01.321Z",
+    "notes": "Sem açúcar e sem gelo",
+    "items": [
+      {
+        "id": "qa-change-204-drink",
+        "externalId": "iced-coffee",
+        "name": "Café gelado",
+        "quantity": 3,
+        "observation": null,
+        "subItems": []
+      },
+      {
+        "id": "qa-change-204-bakery",
+        "externalId": "croissant",
+        "name": "Croissant",
+        "quantity": 1,
+        "observation": null,
+        "subItems": []
+      }
+    ]
+  },
+  "status": 200,
+  "responseHeaders": {
+    "cache-control": "no-store",
+    "connection": "keep-alive",
+    "content-type": "application/json",
+    "date": "Mon, 11 May 2026 20:08:01 GMT",
+    "keep-alive": "timeout=5",
+    "transfer-encoding": "chunked"
+  },
+  "body": {
+    "ok": true,
+    "order": {
+      "id": "qa-change-204",
+      "reference": "Pedido QA 204",
+      "customerName": "Mesa QA 204",
+      "check": 1,
+      "updatedAt": "2026-05-11T20:09:01.321Z",
+      "notes": "Sem açúcar e sem gelo",
+      "items": [
+        {
+          "id": "qa-change-204-drink",
+          "externalId": "iced-coffee",
+          "name": "Café gelado",
+          "quantity": 3,
+          "observation": null,
+          "subItems": []
+        },
+        {
+          "id": "qa-change-204-bakery",
+          "externalId": "croissant",
+          "name": "Croissant",
+          "quantity": 1,
+          "observation": null,
+          "subItems": []
+        }
+      ]
+    }
+  }
+}

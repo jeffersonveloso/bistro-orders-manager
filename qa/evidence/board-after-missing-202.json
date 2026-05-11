@@ -1,0 +1,166 @@
+{
+  "name": "board-after-missing-202",
+  "startedAt": "2026-05-11T20:08:01.275Z",
+  "endedAt": "2026-05-11T20:08:01.279Z",
+  "method": "GET",
+  "url": "http://127.0.0.1:3100/api/board",
+  "requestHeaders": {},
+  "requestBody": null,
+  "status": 200,
+  "responseHeaders": {
+    "cache-control": "no-store",
+    "connection": "keep-alive",
+    "content-type": "application/json",
+    "date": "Mon, 11 May 2026 20:08:01 GMT",
+    "keep-alive": "timeout=5",
+    "transfer-encoding": "chunked",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch"
+  },
+  "body": {
+    "kitchens": [
+      {
+        "id": "kitchen-1",
+        "name": "Kitchen 1",
+        "description": "Drinks & Cold Line",
+        "columns": [
+          {
+            "status": "new",
+            "label": "Novo",
+            "tickets": [
+              {
+                "orderId": "order_qa-import-201",
+                "ticketId": "order_qa-import-201__kitchen-1",
+                "kitchenId": "kitchen-1",
+                "kitchenName": "Kitchen 1",
+                "reference": "Pedido QA 201",
+                "customerName": "Mesa QA 201",
+                "ticketStatus": "new",
+                "ticketStatusLabel": "Novo",
+                "orderStatus": "new",
+                "orderStatusLabel": "Novo",
+                "ageLabel": "agora",
+                "currentItems": [
+                  {
+                    "id": "order_qa-import-201__qa-import-201-drink",
+                    "name": "Café gelado",
+                    "quantity": 1,
+                    "status": "new"
+                  }
+                ],
+                "otherKitchenStatus": "Novo",
+                "otherKitchenName": "Kitchen 2",
+                "hasOpenSyncException": false,
+                "syncExceptionLabel": null,
+                "syncExceptionStatusLabel": null
+              }
+            ]
+          },
+          {
+            "status": "in_preparation",
+            "label": "Em preparo",
+            "tickets": []
+          },
+          {
+            "status": "ready",
+            "label": "Pronto",
+            "tickets": []
+          }
+        ]
+      },
+      {
+        "id": "kitchen-2",
+        "name": "Kitchen 2",
+        "description": "Bakery & Hot Line",
+        "columns": [
+          {
+            "status": "new",
+            "label": "Novo",
+            "tickets": [
+              {
+                "orderId": "order_qa-import-201",
+                "ticketId": "order_qa-import-201__kitchen-2",
+                "kitchenId": "kitchen-2",
+                "kitchenName": "Kitchen 2",
+                "reference": "Pedido QA 201",
+                "customerName": "Mesa QA 201",
+                "ticketStatus": "new",
+                "ticketStatusLabel": "Novo",
+                "orderStatus": "new",
+                "orderStatusLabel": "Novo",
+                "ageLabel": "agora",
+                "currentItems": [
+                  {
+                    "id": "order_qa-import-201__qa-import-201-bakery",
+                    "name": "Croissant",
+                    "quantity": 1,
+                    "status": "new"
+                  }
+                ],
+                "otherKitchenStatus": "Novo",
+                "otherKitchenName": "Kitchen 1",
+                "hasOpenSyncException": false,
+                "syncExceptionLabel": null,
+                "syncExceptionStatusLabel": null
+              }
+            ]
+          },
+          {
+            "status": "in_preparation",
+            "label": "Em preparo",
+            "tickets": []
+          },
+          {
+            "status": "ready",
+            "label": "Pronto",
+            "tickets": []
+          }
+        ]
+      }
+    ],
+    "openSyncExceptions": 1,
+    "syncAlerts": [
+      {
+        "id": "e67ddf34-3980-4a4e-a18e-eb8360e66344",
+        "label": "Item sem mapeamento",
+        "statusLabel": "Ação pendente",
+        "summary": "Pedido QA 202 bloqueado por item sem mapeamento de cozinha",
+        "detail": "Item sem cozinha mapeada: Sanduíche QA.",
+        "status": "open",
+        "orderId": null,
+        "externalOrderId": "qa-missing-202",
+        "reference": "Pedido externo qa-missing-202",
+        "customerName": null,
+        "focusKitchenId": null,
+        "detectedAt": "2026-05-11T20:08:01.271Z",
+        "lastSeenAt": "2026-05-11T20:08:01.271Z"
+      }
+    ],
+    "salonSummary": [
+      {
+        "orderId": "order_qa-import-201",
+        "reference": "Pedido QA 201",
+        "customerName": "Mesa QA 201",
+        "orderStatus": "Novo",
+        "hasOpenSyncException": false,
+        "syncExceptionLabel": null,
+        "syncException": null,
+        "ticketBreakdown": [
+          {
+            "kitchenName": "Kitchen 1",
+            "statusLabel": "Novo"
+          },
+          {
+            "kitchenName": "Kitchen 2",
+            "statusLabel": "Novo"
+          }
+        ]
+      }
+    ],
+    "metrics": {
+      "activeOrders": 1,
+      "partiallyReadyOrders": 0,
+      "readyToServeOrders": 0
+    },
+    "generatedAt": "2026-05-11T20:08:01.278Z"
+  }
+}

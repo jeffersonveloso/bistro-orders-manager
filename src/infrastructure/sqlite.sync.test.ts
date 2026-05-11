@@ -15,6 +15,7 @@ import {
   getProductionRepository,
   mapSyncExceptionRow,
   mapSyncRunRow,
+  resetProductionRepositoryForTests,
   type SqliteProductionRepository,
   type SyncExceptionRow,
   type SyncRunRow,
@@ -717,9 +718,12 @@ describe("sqlite sync repository", () => {
     );
     const databasePath = path.join(temporaryDirectory, "runtime.sqlite");
     const previousPath = process.env.BISTRO_DATABASE_PATH;
+    const previousMode = process.env.BISTRO_ORDER_SYNC_PROVIDER_MODE;
 
     try {
       process.env.BISTRO_DATABASE_PATH = databasePath;
+      delete process.env.BISTRO_ORDER_SYNC_PROVIDER_MODE;
+      resetProductionRepositoryForTests();
 
       const firstRepository = getProductionRepository();
       const secondRepository = getProductionRepository();
@@ -727,10 +731,56 @@ describe("sqlite sync repository", () => {
       expect(firstRepository).toBe(secondRepository);
       expect(fs.existsSync(databasePath)).toBe(true);
     } finally {
+      resetProductionRepositoryForTests();
+
       if (previousPath) {
         process.env.BISTRO_DATABASE_PATH = previousPath;
       } else {
         delete process.env.BISTRO_DATABASE_PATH;
+      }
+
+      if (previousMode) {
+        process.env.BISTRO_ORDER_SYNC_PROVIDER_MODE = previousMode;
+      } else {
+        delete process.env.BISTRO_ORDER_SYNC_PROVIDER_MODE;
+      }
+
+      fs.rmSync(temporaryDirectory, { force: true, recursive: true });
+    }
+  });
+
+  it("starts with a clean production board when runtime mode is anota_ai", () => {
+    const temporaryDirectory = fs.mkdtempSync(
+      path.join(os.tmpdir(), "bistro-sync-live-"),
+    );
+    const databasePath = path.join(temporaryDirectory, "runtime-live.sqlite");
+    const previousPath = process.env.BISTRO_DATABASE_PATH;
+    const previousMode = process.env.BISTRO_ORDER_SYNC_PROVIDER_MODE;
+
+    try {
+      process.env.BISTRO_DATABASE_PATH = databasePath;
+      process.env.BISTRO_ORDER_SYNC_PROVIDER_MODE = "anota_ai";
+      resetProductionRepositoryForTests();
+
+      const runtimeRepository = getProductionRepository();
+
+      expect(runtimeRepository.listKitchens()).toHaveLength(2);
+      expect(runtimeRepository.listKitchenMappings().length).toBeGreaterThan(0);
+      expect(runtimeRepository.listOrderAggregates()).toHaveLength(0);
+      expect(runtimeRepository.listUnresolvedSyncExceptions()).toHaveLength(0);
+    } finally {
+      resetProductionRepositoryForTests();
+
+      if (previousPath) {
+        process.env.BISTRO_DATABASE_PATH = previousPath;
+      } else {
+        delete process.env.BISTRO_DATABASE_PATH;
+      }
+
+      if (previousMode) {
+        process.env.BISTRO_ORDER_SYNC_PROVIDER_MODE = previousMode;
+      } else {
+        delete process.env.BISTRO_ORDER_SYNC_PROVIDER_MODE;
       }
 
       fs.rmSync(temporaryDirectory, { force: true, recursive: true });

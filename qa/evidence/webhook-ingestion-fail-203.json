@@ -1,0 +1,36 @@
+{
+  "name": "webhook-ingestion-fail-203",
+  "startedAt": "2026-05-11T20:08:01.294Z",
+  "endedAt": "2026-05-11T20:08:01.302Z",
+  "method": "POST",
+  "url": "http://127.0.0.1:3100/api/integrations/anota-ai/webhook",
+  "requestHeaders": {
+    "Content-Type": "application/json",
+    "x-bistro-anota-webhook-secret": "qa-webhook-secret"
+  },
+  "requestBody": {
+    "deliveryKey": "qa-delivery-203",
+    "eventType": "order.confirmed",
+    "externalOrderId": "qa-fetch-203"
+  },
+  "status": 500,
+  "responseHeaders": {
+    "cache-control": "no-store",
+    "connection": "keep-alive",
+    "content-type": "application/json",
+    "date": "Mon, 11 May 2026 20:08:01 GMT",
+    "keep-alive": "timeout=5",
+    "transfer-encoding": "chunked",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch"
+  },
+  "body": {
+    "runId": "d2d2a19c-2229-424a-a71b-a7e6aba285c8",
+    "eventId": "6976db72-7632-4d39-bcec-7a74dce05c18",
+    "status": "failed",
+    "outcome": "exception_opened",
+    "externalOrderId": "qa-fetch-203",
+    "orderId": null,
+    "exceptionId": "797a5faf-c3c4-4b92-a69d-78b98d554cd7",
+    "exceptionKind": "ingestion_failed"
+  }
+}

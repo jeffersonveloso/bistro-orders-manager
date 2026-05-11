@@ -1,0 +1,74 @@
+{
+  "name": "provider-admin-order-qa-cancel-205",
+  "startedAt": "2026-05-11T20:08:01.333Z",
+  "endedAt": "2026-05-11T20:08:01.334Z",
+  "method": "POST",
+  "url": "http://127.0.0.1:4010/__admin/order",
+  "requestHeaders": {
+    "Content-Type": "application/json"
+  },
+  "requestBody": {
+    "id": "qa-cancel-205",
+    "reference": "Pedido QA 205",
+    "customerName": "Mesa QA 205",
+    "check": 4,
+    "updatedAt": "2026-05-11T20:10:01.333Z",
+    "notes": null,
+    "items": [
+      {
+        "id": "qa-cancel-205-drink",
+        "externalId": "sparkling-water",
+        "name": "Água com gás",
+        "quantity": 1,
+        "observation": null,
+        "subItems": []
+      },
+      {
+        "id": "qa-cancel-205-bakery",
+        "externalId": "ham-cheese-toast",
+        "name": "Tostado de presunto e queijo",
+        "quantity": 1,
+        "observation": null,
+        "subItems": []
+      }
+    ]
+  },
+  "status": 200,
+  "responseHeaders": {
+    "cache-control": "no-store",
+    "connection": "keep-alive",
+    "content-type": "application/json",
+    "date": "Mon, 11 May 2026 20:08:01 GMT",
+    "keep-alive": "timeout=5",
+    "transfer-encoding": "chunked"
+  },
+  "body": {
+    "ok": true,
+    "order": {
+      "id": "qa-cancel-205",
+      "reference": "Pedido QA 205",
+      "customerName": "Mesa QA 205",
+      "check": 4,
+      "updatedAt": "2026-05-11T20:10:01.333Z",
+      "notes": null,
+      "items": [
+        {
+          "id": "qa-cancel-205-drink",
+          "externalId": "sparkling-water",
+          "name": "Água com gás",
+          "quantity": 1,
+          "observation": null,
+          "subItems": []
+        },
+        {
+          "id": "qa-cancel-205-bakery",
+          "externalId": "ham-cheese-toast",
+          "name": "Tostado de presunto e queijo",
+          "quantity": 1,
+          "observation": null,
+          "subItems": []
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "name": "detail-reconcile-206",
+  "startedAt": "2026-05-11T20:08:01.346Z",
+  "endedAt": "2026-05-11T20:08:01.348Z",
+  "method": "GET",
+  "url": "http://127.0.0.1:3100/api/orders/order_qa-reconcile-206?kitchen=kitchen-1",
+  "requestHeaders": {},
+  "requestBody": null,
+  "status": 200,
+  "responseHeaders": {
+    "cache-control": "no-store",
+    "connection": "keep-alive",
+    "content-type": "application/json",
+    "date": "Mon, 11 May 2026 20:08:01 GMT",
+    "keep-alive": "timeout=5",
+    "transfer-encoding": "chunked",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch"
+  },
+  "body": {
+    "orderId": "order_qa-reconcile-206",
+    "reference": "Pedido QA 206",
+    "customerName": "Mesa QA 206",
+    "focusKitchenId": "kitchen-1",
+    "focusKitchenName": "Kitchen 1",
+    "focusTicketStatus": "new",
+    "focusKitchenStatus": "Novo",
+    "orderStatusKey": "new",
+    "orderStatus": "Novo",
+    "focusItems": [
+      {
+        "id": "order_qa-reconcile-206__qa-reconcile-206-drink",
+        "name": "Cappuccino",
+        "quantity": 1,
+        "notes": null,
+        "status": "new"
+      }
+    ],
+    "otherKitchen": {
+      "id": "kitchen-2",
+      "name": "Kitchen 2",
+      "statusKey": "new",
+      "status": "Novo",
+      "items": [
+        {
+          "id": "order_qa-reconcile-206__qa-reconcile-206-bakery",
+          "name": "Quiche Lorraine",
+          "quantity": 1,
+          "notes": null,
+          "status": "new"
+        }
+      ]
+    },
+    "syncException": null,
+    "syncTrail": []
+  }
+}

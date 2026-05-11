@@ -1,0 +1,34 @@
+{
+  "name": "reconcile-change-204",
+  "startedAt": "2026-05-11T20:08:01.322Z",
+  "endedAt": "2026-05-11T20:08:01.326Z",
+  "method": "POST",
+  "url": "http://127.0.0.1:3100/api/internal/sync/anota-ai",
+  "requestHeaders": {
+    "Content-Type": "application/json",
+    "x-bistro-internal-sync-secret": "qa-internal-secret"
+  },
+  "requestBody": {
+    "externalOrderId": "qa-change-204"
+  },
+  "status": 200,
+  "responseHeaders": {
+    "cache-control": "no-store",
+    "connection": "keep-alive",
+    "content-type": "application/json",
+    "date": "Mon, 11 May 2026 20:08:01 GMT",
+    "keep-alive": "timeout=5",
+    "transfer-encoding": "chunked",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch"
+  },
+  "body": {
+    "runId": "683ac2d6-9d76-4a25-b958-dfbab535cad0",
+    "status": "completed",
+    "processed": 1,
+    "imported": 0,
+    "ignored": 0,
+    "openedExceptions": 1,
+    "resolvedExceptions": 0,
+    "errorCount": 0
+  }
+}
