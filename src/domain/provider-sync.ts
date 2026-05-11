@@ -40,6 +40,7 @@ export type ProviderOrderLifecycle = (typeof providerOrderLifecycles)[number];
 export const webhookProcessOutcomes = [
   "imported",
   "duplicate_ignored",
+  "ignored",
   "exception_opened",
   "exception_refreshed",
 ] as const;
@@ -92,8 +93,9 @@ export interface WebhookInput {
 }
 
 export interface WebhookProcessResult {
-  runId: string;
-  eventId: string;
+  runId: string | null;
+  eventId: string | null;
+  status: Extract<SyncRunStatus, "completed" | "failed">;
   outcome: WebhookProcessOutcome;
   externalOrderId: string | null;
   orderId: string | null;
@@ -108,11 +110,13 @@ export interface ReconcileInput extends ListConfirmedOrdersInput {
 
 export interface SyncRunResult {
   runId: string;
+  status: Extract<SyncRunStatus, "completed" | "failed">;
   processed: number;
   imported: number;
   ignored: number;
   openedExceptions: number;
   resolvedExceptions: number;
+  errorCount: number;
 }
 
 export interface AcknowledgeExceptionInput {
