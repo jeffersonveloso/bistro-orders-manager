@@ -129,6 +129,18 @@ describe("provider sync port contracts", () => {
       },
       acknowledgeException() {},
       resolveException() {},
+      listUnresolvedSyncExceptions() {
+        return [];
+      },
+      listUnresolvedSyncExceptionsByOrderIds() {
+        return [];
+      },
+      getUnresolvedSyncExceptionForOrder() {
+        return undefined;
+      },
+      listSyncExceptionsForOrder() {
+        return [];
+      },
       runInTransaction<T>(work: () => T) {
         return work();
       },

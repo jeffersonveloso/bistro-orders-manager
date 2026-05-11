@@ -80,5 +80,13 @@ export interface ProviderSyncRepository {
   ): SyncExceptionRecord;
   acknowledgeException(input: AcknowledgeSyncExceptionInput): void;
   resolveException(input: ResolveSyncExceptionInput): void;
+  listUnresolvedSyncExceptions(): SyncExceptionRecord[];
+  listUnresolvedSyncExceptionsByOrderIds(
+    orderIds: string[],
+  ): SyncExceptionRecord[];
+  getUnresolvedSyncExceptionForOrder(
+    orderId: string,
+  ): SyncExceptionRecord | undefined;
+  listSyncExceptionsForOrder(orderId: string): SyncExceptionRecord[];
   runInTransaction<T>(work: () => T): T;
 }
