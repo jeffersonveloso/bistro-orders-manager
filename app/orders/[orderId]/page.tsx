@@ -7,6 +7,7 @@ import { OrderDetailClient } from "@/src/components/kds/order-detail-client";
 import {
   getCanonicalAreaPath,
   getCanonicalKitchenOrderPath,
+  type KitchenAreaId,
 } from "@/src/domain/area-access";
 import { maybeRefreshRuntimeProviderSync } from "@/src/infrastructure/runtime-provider-sync-refresh";
 import { getProductionRepository } from "@/src/infrastructure/sqlite";
@@ -24,17 +25,24 @@ export async function loadOrderPage(
     searchParams,
   }: {
     params: Promise<{ orderId: string }>;
-    searchParams: Promise<{ kitchen?: string | string[] }>;
+    searchParams: Promise<{
+      kitchen?: string | string[];
+      returnTo?: string | string[];
+    }>;
   },
   dependencies: OrderPageDependencies = {},
 ) {
   const { orderId } = await params;
   const resolvedSearchParams = await searchParams;
   const requestedKitchenId = readFirstSearchParam(resolvedSearchParams.kitchen);
+  const requestedReturnTo = readFirstSearchParam(resolvedSearchParams.returnTo);
   const { kitchenId } = await requireKitchenPageAccess(dependencies);
+  const returnTo = normalizeReturnTo(requestedReturnTo, kitchenId);
 
   if (requestedKitchenId !== kitchenId) {
-    redirect(getCanonicalKitchenOrderPath(orderId, kitchenId));
+    redirect(
+      appendReturnToParam(getCanonicalKitchenOrderPath(orderId, kitchenId), returnTo),
+    );
   }
 
   const repository = dependencies.repository ?? getProductionRepository();
@@ -64,6 +72,7 @@ export async function loadOrderPage(
     initialData,
     kitchenId,
     orderId,
+    returnTo,
   };
 }
 
@@ -72,9 +81,9 @@ export default async function OrderPage({
   searchParams,
 }: {
   params: Promise<{ orderId: string }>;
-  searchParams: Promise<{ kitchen?: string | string[] }>;
+  searchParams: Promise<{ kitchen?: string | string[]; returnTo?: string | string[] }>;
 }) {
-  const { initialData, kitchenId, orderId } = await loadOrderPage(
+  const { initialData, kitchenId, orderId, returnTo } = await loadOrderPage(
     {
       params,
       searchParams,
@@ -86,12 +95,30 @@ export default async function OrderPage({
       initialData={initialData}
       kitchenId={kitchenId}
       orderId={orderId}
+      returnTo={returnTo}
     />
   );
 }
 
 function readFirstSearchParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
+}
+
+function normalizeReturnTo(value: string | undefined, kitchenId: KitchenAreaId) {
+  const fallbackPath = getCanonicalAreaPath(kitchenId);
+
+  if (!value || !value.startsWith("/") || value.startsWith("//")) {
+    return fallbackPath;
+  }
+
+  return value;
+}
+
+function appendReturnToParam(path: string, returnTo: string) {
+  const separator = path.includes("?") ? "&" : "?";
+  const searchParams = new URLSearchParams({ returnTo });
+
+  return `${path}${separator}${searchParams.toString()}`;
 }
 
 async function runReadRefresh(dependencies: OrderPageDependencies) {

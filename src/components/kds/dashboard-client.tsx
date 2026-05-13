@@ -18,7 +18,13 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { startTransition, useDeferredValue, useState } from "react";
+import {
+  startTransition,
+  useDeferredValue,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import type { ComponentType } from "react";
 
 import type {
@@ -44,7 +50,7 @@ import { Card } from "@/src/components/ui/card";
 import { Input } from "@/src/components/ui/input";
 import { ScrollArea } from "@/src/components/ui/scroll-area";
 import { Separator } from "@/src/components/ui/separator";
-import type { KitchenAreaId } from "@/src/domain/area-access";
+import { kitchenAreaIds, type KitchenAreaId } from "@/src/domain/area-access";
 import { fetchJson } from "@/src/lib/fetch-json";
 import {
   localizeKitchenDescription,
@@ -98,7 +104,191 @@ const defaultColumnVisibility: Record<BoardColumnStatus, boolean> = {
   new: true,
   ready: true,
 };
+const boardColumnStatuses = Object.keys(
+  defaultColumnVisibility,
+) as BoardColumnStatus[];
+const dashboardPreferencesStorageKey = "bistro-dashboard-preferences";
 const boardColumnMinWidthRem = 22;
+
+interface DashboardPreferences {
+  columnVisibility?: Partial<Record<BoardColumnStatus, boolean>>;
+  customerFilter?: string;
+  kitchenVisibility?: Partial<Record<KitchenAreaId, boolean>>;
+  pageSize?: 4 | 6 | 8;
+  referenceFilter?: string;
+  showSyncAlerts?: boolean;
+}
+
+function readDashboardPreferences(): DashboardPreferences | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const rawValue = window.sessionStorage.getItem(
+      dashboardPreferencesStorageKey,
+    );
+
+    if (!rawValue) {
+      return null;
+    }
+
+    const parsedValue = JSON.parse(rawValue) as DashboardPreferences;
+
+    return parsedValue && typeof parsedValue === "object" ? parsedValue : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeDashboardPreferences(preferences: DashboardPreferences) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.sessionStorage.setItem(
+      dashboardPreferencesStorageKey,
+      JSON.stringify(preferences),
+    );
+  } catch {
+    // Best effort only. The board should keep operating even without storage.
+  }
+}
+
+function isAllowedPageSize(value: number): value is 4 | 6 | 8 {
+  return value === 4 || value === 6 || value === 8;
+}
+
+function readDashboardPreferencesFromUrl(): DashboardPreferences | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const searchParams = new URLSearchParams(window.location.search);
+  const preferences: DashboardPreferences = {};
+  const customerFilter = searchParams.get("customer");
+  const referenceFilter = searchParams.get("reference");
+  const pageSize = Number(searchParams.get("pageSize"));
+  const showSyncAlerts = searchParams.get("alerts");
+  const visibleColumns = searchParams.get("columns");
+  const visibleKitchens = searchParams.get("kitchens");
+
+  if (customerFilter) {
+    preferences.customerFilter = customerFilter;
+  }
+
+  if (referenceFilter) {
+    preferences.referenceFilter = referenceFilter;
+  }
+
+  if (isAllowedPageSize(pageSize)) {
+    preferences.pageSize = pageSize;
+  }
+
+  if (showSyncAlerts === "0" || showSyncAlerts === "1") {
+    preferences.showSyncAlerts = showSyncAlerts === "1";
+  }
+
+  if (visibleColumns !== null) {
+    const visibleColumnSet = new Set(
+      visibleColumns === "none"
+        ? []
+        : visibleColumns
+            .split(",")
+            .filter((status): status is BoardColumnStatus =>
+              boardColumnStatuses.includes(status as BoardColumnStatus),
+            ),
+    );
+
+    preferences.columnVisibility = Object.fromEntries(
+      boardColumnStatuses.map((status) => [status, visibleColumnSet.has(status)]),
+    ) as DashboardPreferences["columnVisibility"];
+  }
+
+  if (visibleKitchens !== null) {
+    const visibleKitchenSet = new Set(
+      visibleKitchens === "none"
+        ? []
+        : visibleKitchens
+            .split(",")
+            .filter((kitchenId): kitchenId is KitchenAreaId =>
+              kitchenAreaIds.includes(kitchenId as KitchenAreaId),
+            ),
+    );
+
+    preferences.kitchenVisibility = Object.fromEntries(
+      kitchenAreaIds.map((kitchenId) => [kitchenId, visibleKitchenSet.has(kitchenId)]),
+    ) as DashboardPreferences["kitchenVisibility"];
+  }
+
+  return Object.keys(preferences).length > 0 ? preferences : null;
+}
+
+function buildDashboardSearchParams(preferences: DashboardPreferences) {
+  const searchParams = new URLSearchParams();
+  const resolvedColumnVisibility = preferences.columnVisibility ?? defaultColumnVisibility;
+  const resolvedKitchenVisibility = preferences.kitchenVisibility ?? {};
+  const hasNonDefaultColumns = boardColumnStatuses.some(
+    (status) =>
+      (resolvedColumnVisibility[status] ?? defaultColumnVisibility[status]) !==
+      defaultColumnVisibility[status],
+  );
+  const visibleKitchenIds = kitchenAreaIds.filter(
+    (kitchenId) => resolvedKitchenVisibility[kitchenId] ?? true,
+  );
+
+  if (preferences.customerFilter) {
+    searchParams.set("customer", preferences.customerFilter);
+  }
+
+  if (preferences.referenceFilter) {
+    searchParams.set("reference", preferences.referenceFilter);
+  }
+
+  if (preferences.pageSize && preferences.pageSize !== 4) {
+    searchParams.set("pageSize", String(preferences.pageSize));
+  }
+
+  if (preferences.showSyncAlerts === false) {
+    searchParams.set("alerts", "0");
+  }
+
+  if (hasNonDefaultColumns) {
+    const visibleStatuses = boardColumnStatuses.filter(
+      (status) => resolvedColumnVisibility[status] ?? defaultColumnVisibility[status],
+    );
+
+    searchParams.set(
+      "columns",
+      visibleStatuses.length > 0 ? visibleStatuses.join(",") : "none",
+    );
+  }
+
+  if (visibleKitchenIds.length !== kitchenAreaIds.length) {
+    searchParams.set(
+      "kitchens",
+      visibleKitchenIds.length > 0 ? visibleKitchenIds.join(",") : "none",
+    );
+  }
+
+  return searchParams;
+}
+
+function writeDashboardPreferencesToUrl(preferences: DashboardPreferences) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const searchParams = buildDashboardSearchParams(preferences);
+  const nextSearch = searchParams.toString();
+  const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ""}`;
+  const currentUrl = `${window.location.pathname}${window.location.search}`;
+
+  if (nextUrl !== currentUrl) {
+    window.history.replaceState(window.history.state, "", nextUrl);
+  }
+}
 
 function ExternalItemStatusPill({
   detail,
@@ -147,6 +337,7 @@ export function DashboardClient({
   const [columnPageByKey, setColumnPageByKey] = useState<
     Record<string, number>
   >({});
+  const preferencesHydratedRef = useRef(false);
   const deferredCustomerFilter = useDeferredValue(customerFilter);
   const deferredReferenceFilter = useDeferredValue(referenceFilter);
 
@@ -188,6 +379,96 @@ export function DashboardClient({
   });
   const blockingAuthFeedback = getProtectedSurfaceFeedback(boardQuery.error);
   const actionAuthFeedback = getProtectedSurfaceFeedback(ticketMutation.error);
+
+  useEffect(() => {
+    const applyDashboardPreferences = (preferences: DashboardPreferences | null) => {
+      if (!preferences) {
+        return;
+      }
+
+      if (typeof preferences.customerFilter === "string") {
+        setCustomerFilter(preferences.customerFilter);
+      }
+
+      if (typeof preferences.referenceFilter === "string") {
+        setReferenceFilter(preferences.referenceFilter);
+      }
+
+      if (preferences.pageSize && isAllowedPageSize(preferences.pageSize)) {
+        setPageSize(preferences.pageSize);
+      }
+
+      if (preferences.showSyncAlerts !== undefined) {
+        setShowSyncAlerts(preferences.showSyncAlerts);
+      }
+
+      if (preferences.columnVisibility) {
+        setColumnVisibility((current) => {
+          const next = { ...current };
+
+          for (const status of boardColumnStatuses) {
+            const value = preferences.columnVisibility?.[status];
+
+            if (typeof value === "boolean") {
+              next[status] = value;
+            }
+          }
+
+          return next;
+        });
+      }
+
+      if (preferences.kitchenVisibility) {
+        setKitchenVisibility((current) => {
+          const next = { ...current };
+
+          for (const kitchenId of kitchenAreaIds) {
+            const value = preferences.kitchenVisibility?.[kitchenId];
+
+            if (typeof value === "boolean") {
+              next[kitchenId] = value;
+            }
+          }
+
+          return next;
+        });
+      }
+    };
+
+    applyDashboardPreferences(readDashboardPreferences());
+    applyDashboardPreferences(readDashboardPreferencesFromUrl());
+    preferencesHydratedRef.current = true;
+  }, []);
+
+  useEffect(() => {
+    if (!preferencesHydratedRef.current) {
+      return;
+    }
+
+    writeDashboardPreferences({
+      columnVisibility,
+      customerFilter,
+      kitchenVisibility,
+      pageSize,
+      referenceFilter,
+      showSyncAlerts,
+    });
+    writeDashboardPreferencesToUrl({
+      columnVisibility,
+      customerFilter,
+      kitchenVisibility,
+      pageSize,
+      referenceFilter,
+      showSyncAlerts,
+    });
+  }, [
+    columnVisibility,
+    customerFilter,
+    kitchenVisibility,
+    pageSize,
+    referenceFilter,
+    showSyncAlerts,
+  ]);
 
   if (boardQuery.isLoading) {
     return (
@@ -256,8 +537,31 @@ export function DashboardClient({
   const visibleKitchenCount = filteredKitchens.length;
 
   function openTicket(orderId: string) {
+    const returnTo = (() => {
+      const searchParams = buildDashboardSearchParams({
+        columnVisibility,
+        customerFilter,
+        kitchenVisibility,
+        pageSize,
+        referenceFilter,
+        showSyncAlerts,
+      });
+      const search = searchParams.toString();
+
+      if (typeof window === "undefined") {
+        return search ? `/?${search}` : "/";
+      }
+
+      return `${window.location.pathname}${search ? `?${search}` : ""}`;
+    })();
+
     startTransition(() => {
-      router.push(`/orders/${orderId}?kitchen=${activeKitchenId}`);
+      const searchParams = new URLSearchParams({
+        kitchen: activeKitchenId,
+        returnTo,
+      });
+
+      router.push(`/orders/${orderId}?${searchParams.toString()}`);
     });
   }
 
@@ -561,7 +865,7 @@ export function DashboardClient({
                 </span>
               </div>
 
-              <div className="overflow-x-auto p-4 pb-5">
+              <div className="overflow-x-auto overscroll-x-contain p-4 pb-5 touch-pan-x [-webkit-overflow-scrolling:touch]">
                 {kitchen.columns.length === 0 ? (
                   <div className="rounded-[1.6rem] border border-dashed border-[var(--panel-border)] bg-white/70 px-6 py-12 text-center text-sm text-[var(--ink-soft)]">
                     Nenhuma coluna visível nesta cozinha. Reative um status nos
@@ -613,7 +917,6 @@ export function DashboardClient({
 
                       <ScrollArea
                         className="h-[clamp(18rem,calc(100dvh-24rem),32.5rem)] rounded-[1.6rem] border border-[var(--panel-border)] bg-[var(--panel)] p-1"
-                        viewportClassName="touch-pan-y"
                       >
                         <div className="space-y-3 p-2">
                           {paginatedTickets.length === 0 ? (

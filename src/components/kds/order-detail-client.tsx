@@ -102,10 +102,12 @@ export function OrderDetailClient({
   orderId,
   kitchenId,
   initialData,
+  returnTo,
 }: {
   orderId: string;
   kitchenId: KitchenAreaId;
   initialData?: OrderDetailData;
+  returnTo?: string;
 }) {
   const queryClient = useQueryClient();
   const [showOtherKitchen, setShowOtherKitchen] = useState(true);
@@ -222,7 +224,10 @@ export function OrderDetailClient({
           <div className="space-y-4">
             <div className="flex flex-wrap items-center gap-2">
               <Button asChild size="sm" variant="ghost">
-                <Link href={getCanonicalAreaPath(kitchenId)}>
+                <Link
+                  data-testid="order-detail-back-link"
+                  href={returnTo ?? getCanonicalAreaPath(kitchenId)}
+                >
                   <ArrowLeft className="size-4" />
                   Voltar ao painel
                 </Link>

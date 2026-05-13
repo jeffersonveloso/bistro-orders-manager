@@ -18,7 +18,7 @@ const ScrollArea = React.forwardRef<
   >
     <ScrollAreaPrimitive.Viewport
       className={cn(
-        "h-full w-full rounded-[inherit] overscroll-contain [overscroll-behavior-y:contain] [-webkit-overflow-scrolling:touch]",
+        "h-full w-full rounded-[inherit] [overscroll-behavior-y:contain] [-webkit-overflow-scrolling:touch]",
         viewportClassName,
       )}
     >

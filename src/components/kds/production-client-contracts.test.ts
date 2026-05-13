@@ -150,6 +150,41 @@ describe("production client contracts", () => {
     }
   });
 
+  it("preserves the current dashboard filters in the order-detail back link", () => {
+    const context = createProductionTestContext({
+      applyDemoScenarios: true,
+      importProviderOrders: true,
+    });
+
+    try {
+      const orderDetailData = getOrderDetailData(
+        context.repository,
+        "order_anota-101",
+        "kitchen-1",
+      );
+
+      if (!orderDetailData) {
+        throw new Error("Expected order detail data for return link regression");
+      }
+
+      const markup = renderClient(
+        createElement(OrderDetailClient, {
+          initialData: orderDetailData,
+          kitchenId: "kitchen-1",
+          orderId: "order_anota-101",
+          returnTo: "/?customer=Mesa%207&reference=103&pageSize=8",
+        }),
+      );
+
+      expect(markup).toContain('data-testid="order-detail-back-link"');
+      expect(markup).toContain(
+        'href="/?customer=Mesa%207&amp;reference=103&amp;pageSize=8"',
+      );
+    } finally {
+      context.close();
+    }
+  });
+
   it("groups the salão queue by preparation and delivery while limiting each section to fifteen orders", () => {
     const initialData = {
       generatedAt: "2026-05-13T12:00:00.000Z",
