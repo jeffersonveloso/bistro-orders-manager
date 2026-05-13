@@ -1,7 +1,14 @@
 import { expect, test } from "@playwright/test";
 
+import { loginThroughAccess } from "@/e2e/support/access";
+
 test("loads the dashboard and reaches the salon view", async ({ page }) => {
-  await page.goto("/");
+  await loginThroughAccess(page, {
+    areaId: "kitchen-1",
+    pin: "1111",
+  });
+
+  await expect(page).toHaveURL(/\/$/);
 
   await expect(
     page.getByRole("heading", { name: "Sync board para duas cozinhas" }),
