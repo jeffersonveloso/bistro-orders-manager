@@ -121,15 +121,19 @@ function createMutableSyncProvider(
         channel: snapshot.channel,
         createdAt: snapshot.providerUpdatedAt,
         items: snapshot.items.map((item) => {
-          if (!item.catalogExternalId) {
+          const providerRoutingKey = item.catalogExternalId ?? item.providerItemId;
+
+          if (!providerRoutingKey) {
             throw new Error(
-              `Item "${item.externalItemId}" is missing catalogExternalId`,
+              `Item "${item.externalItemId}" is missing catalogExternalId and providerItemId`,
             );
           }
 
           return {
             externalItemId: item.externalItemId,
-            menuItemId: item.catalogExternalId,
+            menuItemId: providerRoutingKey,
+            providerItemId: item.providerItemId ?? null,
+            providerExternalId: item.catalogExternalId ?? null,
             name: item.name,
             notes: item.notes,
             quantity: item.quantity,
@@ -294,6 +298,127 @@ describe("provider sync routes", () => {
       expect(countRows(context, "provider_events")).toBe(0);
       expect(countRows(context, "sync_runs")).toBe(0);
       expect(context.repository.listUnresolvedSyncExceptions()).toEqual([]);
+    } finally {
+      context.close();
+    }
+  });
+
+  it("accepts Authorization auth and a canonical Anota order payload without an explicit webhook envelope", async () => {
+    const snapshot = createSnapshot("6a037bb9079be15595881d88");
+    const provider = createMutableSyncProvider([snapshot]);
+    const context = createProductionTestContext();
+    const service = createProviderSyncService({
+      provider,
+      repository: context.repository,
+    });
+    const env = {
+      BISTRO_ANOTA_WEBHOOK_SECRET: "webhook-secret",
+    } as NodeJS.ProcessEnv;
+
+    try {
+      const response = await handlePostAnotaWebhook(
+        createJsonRequest(
+          {
+            menu_version: 2,
+            _id: snapshot.externalOrderId,
+            id: snapshot.externalOrderId,
+            check: 1,
+            createdAt: "2026-05-12T19:12:57.327Z",
+            salesChannel: "anotaai",
+            items: [
+              {
+                id: 0,
+                name: "Cappuccino italiano 190ml",
+                quantity: 1,
+                externalId: "cappuccino",
+                subItems: [],
+              },
+            ],
+          },
+          {
+            Authorization: "Bearer webhook-secret",
+          },
+        ),
+        {
+          env,
+          service,
+        },
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual(
+        expect.objectContaining({
+          status: "completed",
+          outcome: "imported",
+          externalOrderId: snapshot.externalOrderId,
+        }),
+      );
+      expect(countRows(context, "provider_events")).toBe(1);
+      expect(countRows(context, "sync_runs")).toBe(1);
+    } finally {
+      context.close();
+    }
+  });
+
+  it("accepts the minimal canceled-order webhook payload emitted by Anota AI", async () => {
+    const baseline = createSnapshot("6a03ad49fdcc75bcd0bff4ed");
+    const provider = createMutableSyncProvider([baseline]);
+    const context = createProductionTestContext();
+    const service = createProviderSyncService({
+      provider,
+      repository: context.repository,
+    });
+    const env = {
+      BISTRO_ANOTA_WEBHOOK_SECRET: "webhook-secret",
+    } as NodeJS.ProcessEnv;
+
+    try {
+      await service.handleWebhook({
+        provider: "anota_ai",
+        deliveryKey: "delivery-canceled-import-1",
+        eventType: "order.confirmed",
+        externalOrderId: baseline.externalOrderId,
+        payload: { id: baseline.externalOrderId },
+      });
+
+      provider.setSnapshot(
+        createSnapshot("6a03ad49fdcc75bcd0bff4ed", {
+          lifecycle: "canceled",
+          providerStatus: "CANCELED",
+          providerUpdatedAt: "2026-05-12T23:15:00.000Z",
+          items: [],
+        }),
+      );
+
+      const response = await handlePostAnotaWebhook(
+        createJsonRequest(
+          {
+            id: baseline.externalOrderId,
+            justification: "teste",
+            canceled: true,
+            merchant: {
+              id: "69f1f2401749a4e61094297c",
+            },
+          },
+          {
+            Authorization: "Bearer webhook-secret",
+          },
+        ),
+        {
+          env,
+          service,
+        },
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual(
+        expect.objectContaining({
+          status: "completed",
+          outcome: "exception_opened",
+          externalOrderId: baseline.externalOrderId,
+          exceptionKind: "canceled_externally",
+        }),
+      );
     } finally {
       context.close();
     }

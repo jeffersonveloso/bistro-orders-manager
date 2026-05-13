@@ -1,6 +1,7 @@
 import {
   areaAccessCookieName,
   clearAreaSessionCookie,
+  shouldUseSecureAreaCookies,
 } from "@/src/infrastructure/area-session";
 
 export const runtime = "nodejs";
@@ -12,16 +13,18 @@ export interface AccessLogoutRouteDependencies {
   secureCookies?: boolean;
 }
 
-export async function POST() {
-  return handlePostAccessLogout();
+export async function POST(request: Request) {
+  return handlePostAccessLogout(request);
 }
 
 export function handlePostAccessLogout(
+  request: Pick<Request, "headers" | "url">,
   dependencies: AccessLogoutRouteDependencies = {},
 ) {
   const env = dependencies.env ?? process.env;
   const secureCookies =
-    dependencies.secureCookies ?? env.NODE_ENV !== "development";
+    dependencies.secureCookies ??
+    shouldUseSecureAreaCookies(request, env.NODE_ENV !== "development");
 
   return new Response(null, {
     status: 204,

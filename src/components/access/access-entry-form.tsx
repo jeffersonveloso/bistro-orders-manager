@@ -1,8 +1,7 @@
 "use client";
 
 import { ArrowRight, ChefHat, Store } from "lucide-react";
-import { useRouter } from "next/navigation";
-import { startTransition, useState, type FormEvent } from "react";
+import { useState } from "react";
 
 import type { AreaId } from "@/src/domain/area-access";
 import { Button } from "@/src/components/ui/button";
@@ -45,88 +44,24 @@ const areaOptions: Array<{
 ];
 
 export function AccessEntryForm({
+  initialAreaId,
   initialNext,
   initialNotice,
   unavailableMessage,
 }: {
+  initialAreaId?: AreaId;
   initialNext?: string;
   initialNotice?: AccessEntryNotice;
   unavailableMessage?: string;
 }) {
-  const router = useRouter();
-  const [selectedAreaId, setSelectedAreaId] = useState<AreaId>(
-    deriveInitialAreaId(initialNext),
-  );
-  const [pin, setPin] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [notice, setNotice] = useState<AccessEntryNotice | undefined>(
-    initialNotice,
-  );
-
+  const defaultAreaId = initialAreaId ?? deriveInitialAreaId(initialNext);
+  const [selectedAreaId, setSelectedAreaId] = useState(defaultAreaId);
   const accessDisabled = Boolean(unavailableMessage);
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (accessDisabled || isSubmitting) {
-      return;
-    }
-
-    setIsSubmitting(true);
-    setNotice(undefined);
-
-    try {
-      const response = await fetch("/api/access/session", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          areaId: selectedAreaId,
-          next: initialNext,
-          pin,
-        }),
-      });
-
-      if (!response.ok) {
-        setNotice({
-          message: await readResponseMessage(
-            response,
-            response.status === 401
-              ? "PIN invalido. Confira a area e tente novamente."
-              : "Nao foi possivel abrir a area agora.",
-          ),
-          tone: response.status === 401 ? "error" : "warning",
-        });
-        setPin("");
-        return;
-      }
-
-      const payload = (await response.json()) as {
-        areaId: AreaId;
-        redirectTo: string;
-      };
-
-      setPin("");
-      startTransition(() => {
-        router.replace(payload.redirectTo);
-        router.refresh();
-      });
-    } catch {
-      setNotice({
-        message:
-          "Falha de conexao ao liberar a area. Verifique a rede local e tente novamente.",
-        tone: "warning",
-      });
-    } finally {
-      setIsSubmitting(false);
-    }
-  }
-
   return (
-    <main className="min-h-screen px-4 py-5 md:px-6 md:py-6">
-      <div className="mx-auto grid min-h-[calc(100vh-3rem)] max-w-[1680px] gap-5 lg:grid-cols-[1.05fr_0.95fr]">
-        <Card className="overflow-hidden border-[var(--panel-border-strong)] bg-[linear-gradient(145deg,rgba(255,250,242,0.95),rgba(243,229,209,0.92))] p-6 md:p-8">
+    <main className="min-h-dvh px-4 py-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] md:px-6 md:py-6">
+      <div className="mx-auto grid min-h-[calc(100dvh-2rem)] max-w-[1680px] gap-5 lg:grid-cols-[1.05fr_0.95fr]">
+        <Card className="order-2 overflow-hidden border-[var(--panel-border-strong)] bg-[linear-gradient(145deg,rgba(255,250,242,0.95),rgba(243,229,209,0.92))] p-6 md:p-8 lg:order-1">
           <div className="flex h-full flex-col justify-between gap-8">
             <div className="space-y-6">
               <div className="flex flex-wrap items-center gap-3">
@@ -146,16 +81,27 @@ export function AccessEntryForm({
                   Cada estacao entra com o proprio PIN e acompanha apenas a
                   superficie liberada para cozinha ou salao.
                 </p>
+                <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-[var(--ink-muted)]">
+                  A selecao e o acesso funcionam direto no navegador, mesmo sem
+                  JavaScript.
+                </p>
               </div>
             </div>
 
             <div className="grid gap-4 md:grid-cols-3">
               {areaOptions.map((option) => {
                 const Icon = option.icon;
+                const isSelected = option.areaId === selectedAreaId;
 
                 return (
                   <div
-                    className="rounded-[1.6rem] border border-[var(--panel-border)] bg-white/72 p-4 shadow-[0_12px_32px_rgba(23,19,15,0.08)]"
+                    className={cn(
+                      "rounded-[1.6rem] border bg-white/72 p-4 shadow-[0_12px_32px_rgba(23,19,15,0.08)]",
+                      isSelected
+                        ? "border-[var(--panel-border-strong)] bg-[color-mix(in_oklab,var(--accent-hot)_14%,white)]"
+                        : "border-[var(--panel-border)]",
+                    )}
+                    data-testid={`access-hero-area-${option.areaId}`}
                     key={option.areaId}
                   >
                     <div className="flex items-center gap-3 text-[var(--ink-strong)]">
@@ -172,6 +118,9 @@ export function AccessEntryForm({
                     <p className="mt-4 font-mono text-[11px] uppercase tracking-[0.24em] text-[var(--ink-muted)]">
                       {option.routeLabel}
                     </p>
+                    <p className="mt-3 font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--accent-hot)]">
+                      {isSelected ? "Area selecionada" : "Disponivel no acesso"}
+                    </p>
                   </div>
                 );
               })}
@@ -179,7 +128,7 @@ export function AccessEntryForm({
           </div>
         </Card>
 
-        <Card className="border-[var(--panel-border-strong)] bg-[linear-gradient(180deg,rgba(255,255,255,0.94),rgba(248,240,229,0.96))] p-6 md:p-8">
+        <Card className="order-1 border-[var(--panel-border-strong)] bg-[linear-gradient(180deg,rgba(255,255,255,0.94),rgba(248,240,229,0.96))] p-5 md:p-8 lg:order-2">
           <div className="space-y-6">
             <div className="space-y-2">
               <p className="font-mono text-xs uppercase tracking-[0.28em] text-[var(--ink-muted)]">
@@ -190,52 +139,65 @@ export function AccessEntryForm({
               </h2>
             </div>
 
-            <form className="space-y-6" onSubmit={handleSubmit}>
+            <form
+              action="/access/enter"
+              className="space-y-6"
+              id="access-form"
+              method="post"
+            >
+              {initialNext ? (
+                <input name="next" type="hidden" value={initialNext} />
+              ) : null}
+
               <fieldset className="space-y-3">
                 <legend className="font-mono text-xs uppercase tracking-[0.28em] text-[var(--ink-muted)]">
                   Area
                 </legend>
                 <div className="grid gap-3">
-                  {areaOptions.map((option) => {
-                    const isSelected = option.areaId === selectedAreaId;
-
-                    return (
-                      <button
-                        aria-pressed={isSelected}
+                  {areaOptions.map((option) => (
+                    <label
+                      aria-pressed={option.areaId === selectedAreaId}
+                      className="block cursor-pointer"
+                      data-testid={`access-area-${option.areaId}`}
+                      key={option.areaId}
+                    >
+                      <input
+                        className="peer sr-only"
+                        defaultChecked={option.areaId === defaultAreaId}
+                        name="areaId"
+                        onChange={() => setSelectedAreaId(option.areaId)}
+                        type="radio"
+                        value={option.areaId}
+                      />
+                      <span
                         className={cn(
-                          "rounded-[1.6rem] border px-4 py-4 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring-strong)] focus-visible:ring-offset-2 focus-visible:ring-offset-transparent",
-                          isSelected
-                            ? "border-[var(--panel-border-strong)] bg-[color-mix(in_oklab,var(--accent-hot)_18%,white)] shadow-[0_18px_35px_rgba(239,139,69,0.14)]"
-                            : "border-[var(--panel-border)] bg-[var(--panel-elevated)] hover:border-[var(--panel-border-strong)] hover:bg-white",
+                          "flex touch-manipulation items-center justify-between gap-3 rounded-[1.6rem] border px-4 py-4 text-left transition peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--ring-strong)] peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-transparent",
+                          "border-[var(--panel-border)] bg-[var(--panel-elevated)]",
+                          "peer-checked:border-[var(--panel-border-strong)] peer-checked:bg-[color-mix(in_oklab,var(--accent-hot)_18%,white)] peer-checked:shadow-[0_18px_35px_rgba(239,139,69,0.14)]",
                         )}
-                        data-testid={`access-area-${option.areaId}`}
-                        key={option.areaId}
-                        onClick={() => setSelectedAreaId(option.areaId)}
-                        type="button"
                       >
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <p className="font-display text-2xl uppercase tracking-[0.08em] text-[var(--ink-strong)]">
-                              {option.label}
-                            </p>
-                            <p className="mt-1 text-sm leading-6 text-[var(--ink-soft)]">
-                              {option.description}
-                            </p>
-                          </div>
-                          <span
-                            className={cn(
-                              "rounded-full border px-3 py-1 font-mono text-[11px] uppercase tracking-[0.24em]",
-                              isSelected
-                                ? "border-[var(--panel-border-strong)] bg-white/80 text-[var(--ink-strong)]"
-                                : "border-[var(--panel-border)] text-[var(--ink-muted)]",
-                            )}
-                          >
-                            {isSelected ? "Selecionada" : "Tocar para abrir"}
+                        <span>
+                          <span className="font-display text-2xl uppercase tracking-[0.08em] text-[var(--ink-strong)]">
+                            {option.label}
                           </span>
-                        </div>
-                      </button>
-                    );
-                  })}
+                          <span className="mt-1 block text-sm leading-6 text-[var(--ink-soft)]">
+                            {option.description}
+                          </span>
+                        </span>
+                        <span
+                          className={cn(
+                            "rounded-full border px-3 py-1 font-mono text-[11px] uppercase tracking-[0.24em]",
+                            "border-[var(--panel-border)] text-[var(--ink-muted)]",
+                            "peer-checked:border-[var(--panel-border-strong)] peer-checked:bg-white/80 peer-checked:text-[var(--ink-strong)]",
+                          )}
+                        >
+                          {option.areaId === selectedAreaId
+                            ? "Selecionada"
+                            : "Tocar para abrir"}
+                        </span>
+                      </span>
+                    </label>
+                  ))}
                 </div>
               </fieldset>
 
@@ -250,13 +212,15 @@ export function AccessEntryForm({
                   autoComplete="current-password"
                   className="h-16 w-full rounded-[1.5rem] border border-[var(--panel-border-strong)] bg-white px-5 text-2xl tracking-[0.22em] text-[var(--ink-strong)] shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] outline-none transition placeholder:text-[var(--ink-muted)] focus:border-[var(--accent-hot)] focus:ring-4 focus:ring-[var(--ring-strong)]"
                   data-testid="access-pin-input"
-                  disabled={accessDisabled || isSubmitting}
+                  disabled={accessDisabled}
+                  enterKeyHint="go"
                   id="access-pin"
                   inputMode="numeric"
-                  onChange={(event) => setPin(event.target.value)}
+                  name="pin"
+                  pattern="[0-9]*"
                   placeholder="Digite o PIN"
+                  required
                   type="password"
-                  value={pin}
                 />
               </div>
 
@@ -267,38 +231,38 @@ export function AccessEntryForm({
                   </p>
                   <p className="mt-2">{unavailableMessage}</p>
                 </div>
-              ) : notice ? (
+              ) : initialNotice ? (
                 <div
                   className={cn(
                     "rounded-[1.5rem] border px-4 py-4 text-sm leading-6",
-                    notice.tone === "error" &&
+                    initialNotice.tone === "error" &&
                       "border-[color-mix(in_oklab,var(--accent-hot)_42%,white)] bg-[color-mix(in_oklab,var(--accent-hot)_12%,white)] text-[var(--ink-strong)]",
-                    notice.tone === "warning" &&
+                    initialNotice.tone === "warning" &&
                       "border-[color-mix(in_oklab,var(--accent-warm)_42%,white)] bg-[color-mix(in_oklab,var(--accent-warm)_12%,white)] text-[var(--ink-strong)]",
-                    notice.tone === "info" &&
+                    initialNotice.tone === "info" &&
                       "border-[var(--panel-border-strong)] bg-[var(--panel)] text-[var(--ink-soft)]",
                   )}
                   data-testid="access-notice"
                 >
                   <p className="font-mono text-[11px] uppercase tracking-[0.24em]">
-                    {notice.tone === "error"
+                    {initialNotice.tone === "error"
                       ? "Acesso bloqueado"
-                      : notice.tone === "warning"
+                      : initialNotice.tone === "warning"
                         ? "Atencao"
                         : "Informacao"}
                   </p>
-                  <p className="mt-2">{notice.message}</p>
+                  <p className="mt-2">{initialNotice.message}</p>
                 </div>
               ) : null}
 
               <Button
                 className="h-16 w-full rounded-[1.5rem] text-base"
                 data-testid="access-submit"
-                disabled={accessDisabled || isSubmitting || pin.trim().length === 0}
+                disabled={accessDisabled}
                 size="lg"
                 type="submit"
               >
-                {isSubmitting ? "Liberando area..." : "Entrar na area"}
+                Entrar na area
                 <ArrowRight className="size-5" />
               </Button>
             </form>
@@ -307,30 +271,6 @@ export function AccessEntryForm({
       </div>
     </main>
   );
-}
-
-async function readResponseMessage(response: Response, fallbackMessage: string) {
-  try {
-    const body = (await response.json()) as unknown;
-
-    if (typeof body === "string" && body.length > 0) {
-      return body;
-    }
-
-    if (
-      typeof body === "object" &&
-      body !== null &&
-      "message" in body &&
-      typeof body.message === "string" &&
-      body.message.length > 0
-    ) {
-      return body.message;
-    }
-  } catch {
-    return fallbackMessage;
-  }
-
-  return fallbackMessage;
 }
 
 function deriveInitialAreaId(next?: string): AreaId {

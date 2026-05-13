@@ -9,6 +9,7 @@ import type {
   ProductionRepository,
   ProviderSyncRepository,
 } from "@/src/application/ports";
+import type { CatalogMappingRepository } from "@/src/application/catalog-mapping-service";
 import { syncOrders } from "@/src/application/order-sync-service";
 import {
   kitchens,
@@ -37,12 +38,16 @@ import {
   type SyncRunRecord,
 } from "@/src/domain/provider-sync";
 import type { SplitOrderResult } from "@/src/domain/split-order-service";
-import { createMockOrderProvider } from "@/src/infrastructure/mock-order-provider";
+import {
+  createMockOrderProvider,
+  listMockKitchenMappings,
+} from "@/src/infrastructure/mock-order-provider";
 import { parseOrderSyncProviderMode } from "@/src/infrastructure/order-provider-factory";
 
 type SqliteDatabase = InstanceType<typeof BetterSqlite3>;
 export type SqliteProductionRepository = ProductionRepository &
-  ProviderSyncRepository;
+  ProviderSyncRepository &
+  CatalogMappingRepository;
 
 export interface ProviderEventRow {
   id: string;
@@ -122,59 +127,6 @@ function getConfiguredDatabasePath() {
     : path.join(/* turbopackIgnore: true */ process.cwd(), configuredPath);
 }
 
-export const kitchenMappingsSeed: MenuItemKitchenMapping[] = [
-  {
-    menuItemId: "iced-coffee",
-    menuItemName: "Café gelado",
-    kitchenId: "kitchen-1",
-  },
-  {
-    menuItemId: "orange-juice",
-    menuItemName: "Suco de laranja",
-    kitchenId: "kitchen-1",
-  },
-  {
-    menuItemId: "cappuccino",
-    menuItemName: "Cappuccino",
-    kitchenId: "kitchen-1",
-  },
-  {
-    menuItemId: "hibiscus-iced-tea",
-    menuItemName: "Chá gelado de hibisco",
-    kitchenId: "kitchen-1",
-  },
-  {
-    menuItemId: "sparkling-water",
-    menuItemName: "Água com gás",
-    kitchenId: "kitchen-1",
-  },
-  {
-    menuItemId: "croissant",
-    menuItemName: "Croissant",
-    kitchenId: "kitchen-2",
-  },
-  {
-    menuItemId: "quiche-lorraine",
-    menuItemName: "Quiche Lorraine",
-    kitchenId: "kitchen-2",
-  },
-  {
-    menuItemId: "pain-au-chocolat",
-    menuItemName: "Pain au chocolat",
-    kitchenId: "kitchen-2",
-  },
-  {
-    menuItemId: "brownie",
-    menuItemName: "Brownie",
-    kitchenId: "kitchen-2",
-  },
-  {
-    menuItemId: "ham-cheese-toast",
-    menuItemName: "Tostado de presunto e queijo",
-    kitchenId: "kitchen-2",
-  },
-];
-
 let database: SqliteDatabase | undefined;
 let repository: SqliteProductionRepository | undefined;
 
@@ -209,6 +161,7 @@ function migrate(db: SqliteDatabase) {
       external_id TEXT NOT NULL UNIQUE,
       reference TEXT NOT NULL,
       customer_name TEXT,
+      waiter_name TEXT,
       source TEXT NOT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -218,6 +171,7 @@ function migrate(db: SqliteDatabase) {
       id TEXT PRIMARY KEY,
       order_id TEXT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
       kitchen_id TEXT NOT NULL REFERENCES kitchens(id),
+      started_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       UNIQUE(order_id, kitchen_id)
@@ -313,9 +267,274 @@ function migrate(db: SqliteDatabase) {
     CREATE INDEX IF NOT EXISTS idx_order_sync_exceptions_provider_lookup
       ON order_sync_exceptions(provider, kind, external_order_id, order_id, last_seen_at DESC);
   `);
+
+  ensureProviderMappingColumns(db);
+  ensureOrderMetadataColumns(db);
+  ensureKitchenTicketMetadataColumns(db);
 }
 
-function seedStaticData(db: SqliteDatabase) {
+function ensureProviderMappingColumns(db: SqliteDatabase) {
+  const columns = db
+    .prepare("PRAGMA table_info(menu_item_kitchen_mappings)")
+    .all() as Array<{ name: string }>;
+  const hasProviderCatalogId = columns.some(
+    (column) => column.name === "provider_catalog_id",
+  );
+  const hasProviderItemId = columns.some(
+    (column) => column.name === "provider_item_id",
+  );
+  const hasProviderExternalId = columns.some(
+    (column) => column.name === "provider_external_id",
+  );
+
+  if (!hasProviderCatalogId) {
+    db.exec(`
+      ALTER TABLE menu_item_kitchen_mappings
+      ADD COLUMN provider_catalog_id TEXT
+    `);
+  }
+
+  if (!hasProviderItemId) {
+    db.exec(`
+      ALTER TABLE menu_item_kitchen_mappings
+      ADD COLUMN provider_item_id TEXT
+    `);
+  }
+
+  if (!hasProviderExternalId) {
+    db.exec(`
+      ALTER TABLE menu_item_kitchen_mappings
+      ADD COLUMN provider_external_id TEXT
+    `);
+  }
+
+  db.exec(`
+    UPDATE menu_item_kitchen_mappings
+    SET provider_external_id = provider_catalog_id
+    WHERE provider_external_id IS NULL
+      AND provider_catalog_id IS NOT NULL
+  `);
+
+  collapseDuplicateMenuItemMappings(db);
+
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_menu_item_kitchen_mappings_provider_catalog_id
+      ON menu_item_kitchen_mappings(provider_catalog_id)
+      WHERE provider_catalog_id IS NOT NULL
+  `);
+
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_menu_item_kitchen_mappings_provider_item_id
+      ON menu_item_kitchen_mappings(provider_item_id)
+      WHERE provider_item_id IS NOT NULL
+  `);
+
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_menu_item_kitchen_mappings_provider_external_id
+      ON menu_item_kitchen_mappings(provider_external_id)
+      WHERE provider_external_id IS NOT NULL
+  `);
+
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_menu_item_kitchen_mappings_menu_item_name
+      ON menu_item_kitchen_mappings(menu_item_name COLLATE NOCASE)
+  `);
+
+}
+
+function ensureOrderMetadataColumns(db: SqliteDatabase) {
+  const columns = db
+    .prepare("PRAGMA table_info(orders)")
+    .all() as Array<{ name: string }>;
+  const hasWaiterName = columns.some((column) => column.name === "waiter_name");
+
+  if (!hasWaiterName) {
+    db.exec(`
+      ALTER TABLE orders
+      ADD COLUMN waiter_name TEXT
+    `);
+  }
+}
+
+function ensureKitchenTicketMetadataColumns(db: SqliteDatabase) {
+  const columns = db
+    .prepare("PRAGMA table_info(kitchen_tickets)")
+    .all() as Array<{ name: string }>;
+  const hasStartedAt = columns.some((column) => column.name === "started_at");
+
+  if (!hasStartedAt) {
+    db.exec(`
+      ALTER TABLE kitchen_tickets
+      ADD COLUMN started_at TEXT
+    `);
+  }
+}
+
+interface MappingRow {
+  rowId: number;
+  menuItemId: string;
+  menuItemName: string;
+  kitchenId: string;
+  providerItemId: string | null;
+  providerExternalId: string | null;
+}
+
+function collapseDuplicateMenuItemMappings(db: SqliteDatabase) {
+  collapseDuplicateMenuItemMappingsByKey(
+    db,
+    (row) => normalizeMappingNameKey(row.menuItemName),
+  );
+  collapseDuplicateMenuItemMappingsByKey(db, (row) => row.providerItemId);
+  collapseDuplicateMenuItemMappingsByKey(db, (row) => row.providerExternalId);
+}
+
+function collapseDuplicateMenuItemMappingsByKey(
+  db: SqliteDatabase,
+  readKey: (row: MappingRow) => string | null,
+) {
+  const rows = db
+    .prepare(
+      `
+        SELECT
+          rowid as rowId,
+          menu_item_id as menuItemId,
+          menu_item_name as menuItemName,
+          kitchen_id as kitchenId,
+          provider_item_id as providerItemId,
+          provider_external_id as providerExternalId
+        FROM menu_item_kitchen_mappings
+        ORDER BY rowid ASC
+      `,
+    )
+    .all() as MappingRow[];
+  const groups = new Map<string, MappingRow[]>();
+
+  for (const row of rows) {
+    const key = readKey(row);
+
+    if (!key) {
+      continue;
+    }
+
+    const normalizedKey = key.trim();
+
+    if (normalizedKey.length === 0) {
+      continue;
+    }
+
+    const group = groups.get(normalizedKey) ?? [];
+    group.push(row);
+    groups.set(normalizedKey, group);
+  }
+
+  const merge = db.transaction((duplicates: MappingRow[]) => {
+    if (duplicates.length <= 1) {
+      return;
+    }
+
+    const canonical = chooseCanonicalMappingRow(duplicates);
+    const mergedProviderItemId = firstNonBlankString(
+      duplicates.map((row) => row.providerItemId),
+    );
+    const mergedProviderExternalId = firstNonBlankString(
+      duplicates.map((row) => row.providerExternalId),
+    );
+
+    db.prepare(
+      `
+        UPDATE menu_item_kitchen_mappings
+        SET
+          menu_item_name = @menuItemName,
+          kitchen_id = @kitchenId,
+          provider_item_id = @providerItemId,
+          provider_external_id = @providerExternalId
+        WHERE menu_item_id = @menuItemId
+      `,
+    ).run({
+      menuItemId: canonical.menuItemId,
+      menuItemName: canonical.menuItemName,
+      kitchenId: canonical.kitchenId,
+      providerItemId: mergedProviderItemId,
+      providerExternalId: mergedProviderExternalId,
+    });
+
+    for (const row of duplicates) {
+      if (row.menuItemId === canonical.menuItemId) {
+        continue;
+      }
+
+      db.prepare(
+        `
+          UPDATE order_items
+          SET menu_item_id = ?
+          WHERE menu_item_id = ?
+        `,
+      ).run(canonical.menuItemId, row.menuItemId);
+
+      db.prepare(
+        `
+          DELETE FROM menu_item_kitchen_mappings
+          WHERE menu_item_id = ?
+        `,
+      ).run(row.menuItemId);
+    }
+  });
+
+  for (const duplicates of groups.values()) {
+    if (duplicates.length > 1) {
+      merge(duplicates);
+    }
+  }
+}
+
+function chooseCanonicalMappingRow(rows: MappingRow[]) {
+  return [...rows].sort((left, right) => {
+    const leftScore = scoreMappingRow(left);
+    const rightScore = scoreMappingRow(right);
+
+    if (leftScore !== rightScore) {
+      return rightScore - leftScore;
+    }
+
+    return left.rowId - right.rowId;
+  })[0]!;
+}
+
+function scoreMappingRow(row: MappingRow) {
+  let score = 0;
+
+  if (typeof row.providerItemId === "string" && row.providerItemId.trim().length > 0) {
+    score += 2;
+  }
+
+  if (
+    typeof row.providerExternalId === "string" &&
+    row.providerExternalId.trim().length > 0
+  ) {
+    score += 1;
+  }
+
+  return score;
+}
+
+function firstNonBlankString(values: Array<string | null>) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+
+  return null;
+}
+
+function normalizeMappingNameKey(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function seedStaticData(
+  db: SqliteDatabase,
+  initialKitchenMappings: readonly MenuItemKitchenMapping[] = [],
+) {
   const insertKitchen = db.prepare(`
     INSERT INTO kitchens (id, name, description)
     VALUES (@id, @name, @description)
@@ -325,11 +544,31 @@ function seedStaticData(db: SqliteDatabase) {
   `);
 
   const insertMapping = db.prepare(`
-    INSERT INTO menu_item_kitchen_mappings (menu_item_id, menu_item_name, kitchen_id)
-    VALUES (@menuItemId, @menuItemName, @kitchenId)
+    INSERT INTO menu_item_kitchen_mappings (
+      menu_item_id,
+      menu_item_name,
+      kitchen_id,
+      provider_item_id,
+      provider_external_id
+    )
+    VALUES (
+      @menuItemId,
+      @menuItemName,
+      @kitchenId,
+      @providerItemId,
+      @providerExternalId
+    )
     ON CONFLICT(menu_item_id) DO UPDATE SET
       menu_item_name = excluded.menu_item_name,
-      kitchen_id = excluded.kitchen_id
+      kitchen_id = excluded.kitchen_id,
+      provider_item_id = COALESCE(
+        excluded.provider_item_id,
+        menu_item_kitchen_mappings.provider_item_id
+      ),
+      provider_external_id = COALESCE(
+        excluded.provider_external_id,
+        menu_item_kitchen_mappings.provider_external_id
+      )
   `);
 
   const seed = db.transaction(() => {
@@ -337,8 +576,12 @@ function seedStaticData(db: SqliteDatabase) {
       insertKitchen.run(kitchen);
     }
 
-    for (const mapping of kitchenMappingsSeed) {
-      insertMapping.run(mapping);
+    for (const mapping of initialKitchenMappings) {
+      insertMapping.run({
+        ...mapping,
+        providerItemId: mapping.providerItemId ?? null,
+        providerExternalId: mapping.providerExternalId ?? null,
+      });
     }
   });
 
@@ -354,6 +597,7 @@ function loadAggregateRows(db: SqliteDatabase) {
           external_id as externalId,
           reference,
           customer_name as customerName,
+          waiter_name as waiterName,
           source,
           created_at as createdAt,
           updated_at as updatedAt
@@ -370,6 +614,7 @@ function loadAggregateRows(db: SqliteDatabase) {
           id,
           order_id as orderId,
           kitchen_id as kitchenId,
+          started_at as startedAt,
           created_at as createdAt,
           updated_at as updatedAt
         FROM kitchen_tickets
@@ -532,15 +777,75 @@ export function mapSyncExceptionRow(
 }
 
 function createProductionRepository(db: SqliteDatabase): SqliteProductionRepository {
+  const upsertKitchenMappingStatement = db.prepare(`
+    INSERT INTO menu_item_kitchen_mappings (
+      menu_item_id,
+      menu_item_name,
+      kitchen_id,
+      provider_item_id,
+      provider_external_id
+    )
+    VALUES (
+      @menuItemId,
+      @menuItemName,
+      @kitchenId,
+      @providerItemId,
+      @providerExternalId
+    )
+    ON CONFLICT(menu_item_id) DO UPDATE SET
+      menu_item_name = excluded.menu_item_name,
+      kitchen_id = excluded.kitchen_id,
+      provider_item_id = COALESCE(
+        excluded.provider_item_id,
+        menu_item_kitchen_mappings.provider_item_id
+      ),
+      provider_external_id = COALESCE(
+        excluded.provider_external_id,
+        menu_item_kitchen_mappings.provider_external_id
+      )
+  `);
+
   const insertOrder = db.prepare(`
-    INSERT INTO orders (id, external_id, reference, customer_name, source, created_at, updated_at)
-    VALUES (@id, @externalId, @reference, @customerName, @source, @createdAt, @updatedAt)
+    INSERT INTO orders (
+      id,
+      external_id,
+      reference,
+      customer_name,
+      waiter_name,
+      source,
+      created_at,
+      updated_at
+    )
+    VALUES (
+      @id,
+      @externalId,
+      @reference,
+      @customerName,
+      @waiterName,
+      @source,
+      @createdAt,
+      @updatedAt
+    )
     ON CONFLICT(id) DO NOTHING
   `);
 
   const insertTicket = db.prepare(`
-    INSERT INTO kitchen_tickets (id, order_id, kitchen_id, created_at, updated_at)
-    VALUES (@id, @orderId, @kitchenId, @createdAt, @updatedAt)
+    INSERT INTO kitchen_tickets (
+      id,
+      order_id,
+      kitchen_id,
+      started_at,
+      created_at,
+      updated_at
+    )
+    VALUES (
+      @id,
+      @orderId,
+      @kitchenId,
+      @startedAt,
+      @createdAt,
+      @updatedAt
+    )
     ON CONFLICT(id) DO NOTHING
   `);
 
@@ -766,6 +1071,21 @@ function createProductionRepository(db: SqliteDatabase): SqliteProductionReposit
       imported_order_id as importedOrderId
     FROM provider_orders
     WHERE provider = @provider AND external_order_id = @externalOrderId
+  `);
+
+  const selectAllProviderOrders = db.prepare(`
+    SELECT
+      provider,
+      external_order_id as externalOrderId,
+      provider_status as providerStatus,
+      lifecycle,
+      snapshot_hash as snapshotHash,
+      normalized_json as normalizedJson,
+      last_seen_at as lastSeenAt,
+      last_applied_at as lastAppliedAt,
+      imported_order_id as importedOrderId
+    FROM provider_orders
+    ORDER BY last_seen_at DESC, external_order_id ASC
   `);
 
   const upsertProviderOrderStatement = db.prepare(`
@@ -1029,12 +1349,21 @@ function createProductionRepository(db: SqliteDatabase): SqliteProductionReposit
             SELECT
               menu_item_id as menuItemId,
               menu_item_name as menuItemName,
-              kitchen_id as kitchenId
+              kitchen_id as kitchenId,
+              provider_item_id as providerItemId,
+              provider_external_id as providerExternalId
             FROM menu_item_kitchen_mappings
             ORDER BY menu_item_name ASC
           `,
         )
         .all() as MenuItemKitchenMapping[];
+    },
+    upsertKitchenMapping(mapping) {
+      upsertKitchenMappingStatement.run({
+        ...mapping,
+        providerItemId: mapping.providerItemId ?? null,
+        providerExternalId: mapping.providerExternalId ?? null,
+      });
     },
     listImportedExternalOrderIds() {
       const rows = db
@@ -1089,6 +1418,16 @@ function createProductionRepository(db: SqliteDatabase): SqliteProductionReposit
         )
         .get(itemId) as { kitchenId: KitchenId } | undefined;
 
+      if (status !== "new" && kitchenId?.kitchenId) {
+        db.prepare(
+          `
+            UPDATE kitchen_tickets
+            SET started_at = COALESCE(started_at, ?), updated_at = ?
+            WHERE order_id = ? AND kitchen_id = ?
+          `,
+        ).run(timestamp, timestamp, orderId, kitchenId.kitchenId);
+      }
+
       touchTicketAndOrder(orderId, kitchenId?.kitchenId);
       return this.getOrderAggregate(orderId)!;
     },
@@ -1096,17 +1435,24 @@ function createProductionRepository(db: SqliteDatabase): SqliteProductionReposit
       const timestamp = new Date().toISOString();
       db.prepare(
         `
-          UPDATE order_items
-          SET status = 'in_preparation', updated_at = ?
-          WHERE order_id = ? AND kitchen_id = ? AND status = 'new'
+          UPDATE kitchen_tickets
+          SET started_at = COALESCE(started_at, ?), updated_at = ?
+          WHERE order_id = ? AND kitchen_id = ?
         `,
-      ).run(timestamp, orderId, kitchenId);
+      ).run(timestamp, timestamp, orderId, kitchenId);
 
       touchTicketAndOrder(orderId, kitchenId);
       return this.getOrderAggregate(orderId)!;
     },
     completeKitchenTicket(orderId, kitchenId) {
       const timestamp = new Date().toISOString();
+      db.prepare(
+        `
+          UPDATE kitchen_tickets
+          SET started_at = COALESCE(started_at, ?), updated_at = ?
+          WHERE order_id = ? AND kitchen_id = ?
+        `,
+      ).run(timestamp, timestamp, orderId, kitchenId);
       db.prepare(
         `
           UPDATE order_items
@@ -1196,6 +1542,11 @@ function createProductionRepository(db: SqliteDatabase): SqliteProductionReposit
       }) as ProviderOrderRow | undefined;
 
       return row ? mapProviderOrderRow(row) : undefined;
+    },
+    listProviderOrders() {
+      return (selectAllProviderOrders.all() as ProviderOrderRow[]).map(
+        mapProviderOrderRow,
+      );
     },
     upsertProviderOrder(state) {
       upsertProviderOrderStatement.run({
@@ -1405,17 +1756,19 @@ function initializeRepository({
   applyDemoScenarios,
   db,
   importProviderOrders,
+  initialKitchenMappings,
   provider,
   seedDemoExceptions,
 }: {
   applyDemoScenarios: boolean;
   db: SqliteDatabase;
   importProviderOrders: boolean;
+  initialKitchenMappings: readonly MenuItemKitchenMapping[];
   provider: OrderProviderPort;
   seedDemoExceptions: boolean;
 }) {
   migrate(db);
-  seedStaticData(db);
+  seedStaticData(db, initialKitchenMappings);
 
   const nextRepository = createProductionRepository(db);
 
@@ -1425,7 +1778,7 @@ function initializeRepository({
     if (syncResult.skipped.length > 0) {
       for (const skippedOrder of syncResult.skipped) {
         console.warn(
-          `[order-sync] skipped ${skippedOrder.externalId} (${skippedOrder.reference}) due to missing mapping for ${skippedOrder.menuItemId}`,
+          `[order-sync] skipped ${skippedOrder.externalId} (${skippedOrder.reference}) due to missing mapping for ${skippedOrder.providerExternalId}`,
         );
       }
     }
@@ -1451,11 +1804,13 @@ export interface ProductionTestContext {
 export function createProductionTestContext({
   applyDemoScenarios = false,
   importProviderOrders = false,
+  initialKitchenMappings = listMockKitchenMappings(),
   provider = createMockOrderProvider(),
   seedDemoExceptions = false,
 }: {
   applyDemoScenarios?: boolean;
   importProviderOrders?: boolean;
+  initialKitchenMappings?: readonly MenuItemKitchenMapping[];
   provider?: OrderProviderPort;
   seedDemoExceptions?: boolean;
 } = {}): ProductionTestContext {
@@ -1464,6 +1819,7 @@ export function createProductionTestContext({
     applyDemoScenarios,
     db,
     importProviderOrders,
+    initialKitchenMappings,
     provider,
     seedDemoExceptions,
   });
@@ -1484,6 +1840,7 @@ function getRuntimeRepositoryConfig(env: NodeJS.ProcessEnv = process.env) {
     return {
       applyDemoScenarios: false,
       importProviderOrders: false,
+      initialKitchenMappings: [],
       provider: createMockOrderProvider(),
       seedDemoExceptions: false,
     } as const;
@@ -1492,6 +1849,7 @@ function getRuntimeRepositoryConfig(env: NodeJS.ProcessEnv = process.env) {
   return {
     applyDemoScenarios: true,
     importProviderOrders: true,
+    initialKitchenMappings: listMockKitchenMappings(),
     provider: createMockOrderProvider(),
     seedDemoExceptions: true,
   } as const;

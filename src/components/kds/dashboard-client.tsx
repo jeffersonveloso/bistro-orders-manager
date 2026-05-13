@@ -4,17 +4,27 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   ArrowUpRight,
+  ChevronLeft,
+  ChevronRight,
   ChefHat,
+  Eye,
+  EyeOff,
+  FilterX,
   LayoutPanelTop,
   RefreshCw,
+  Search,
   TriangleAlert,
+  UserRound,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { startTransition, useState } from "react";
+import { startTransition, useDeferredValue, useState } from "react";
 import type { ComponentType } from "react";
 
-import type { DashboardData } from "@/src/application/production-service";
+import type {
+  BoardTicketCard,
+  DashboardData,
+} from "@/src/application/production-service";
 import {
   canManageKitchen,
   getBoardQueryOptions,
@@ -23,6 +33,7 @@ import {
   hasAuthorizedOrderAccess,
   prioritizeKitchens,
 } from "@/src/components/kds/production-client-contracts";
+import { AreaSwitchButton } from "@/src/components/kds/area-switch-button";
 import {
   ProtectedSurfaceBanner,
   ProtectedSurfaceFallback,
@@ -30,11 +41,16 @@ import {
 import { StatusBadge } from "@/src/components/kds/status-badge";
 import { Button } from "@/src/components/ui/button";
 import { Card } from "@/src/components/ui/card";
+import { Input } from "@/src/components/ui/input";
 import { ScrollArea } from "@/src/components/ui/scroll-area";
 import { Separator } from "@/src/components/ui/separator";
 import type { KitchenAreaId } from "@/src/domain/area-access";
 import { fetchJson } from "@/src/lib/fetch-json";
-import { cn } from "@/src/lib/utils";
+import {
+  localizeKitchenDescription,
+  localizeKitchenLabel,
+} from "@/src/lib/kitchen-labels";
+import { cn, formatOperationalTime } from "@/src/lib/utils";
 
 function getItemStatusLabel(status: "new" | "in_preparation" | "ready") {
   switch (status) {
@@ -46,6 +62,43 @@ function getItemStatusLabel(status: "new" | "in_preparation" | "ready") {
       return "Em preparo";
   }
 }
+
+function normalizeFilterValue(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLocaleLowerCase("pt-BR");
+}
+
+function matchesTicketFilters(
+  ticket: BoardTicketCard,
+  customerFilter: string,
+  referenceFilter: string,
+) {
+  const matchesCustomer =
+    customerFilter.length === 0 ||
+    normalizeFilterValue(ticket.customerName ?? "").includes(customerFilter);
+  const matchesReference =
+    referenceFilter.length === 0 ||
+    normalizeFilterValue(ticket.reference).includes(referenceFilter);
+
+  return matchesCustomer && matchesReference;
+}
+
+function getColumnPageKey(kitchenId: string, status: string) {
+  return `${kitchenId}:${status}`;
+}
+
+type BoardColumnStatus = DashboardData["kitchens"][number]["columns"][number]["status"];
+
+const defaultColumnVisibility: Record<BoardColumnStatus, boolean> = {
+  canceled: false,
+  in_preparation: true,
+  new: true,
+  ready: true,
+};
+const boardColumnMinWidthRem = 22;
 
 function ExternalItemStatusPill({
   detail,
@@ -81,6 +134,21 @@ export function DashboardClient({
   const router = useRouter();
   const queryClient = useQueryClient();
   const [busyTicketId, setBusyTicketId] = useState<string | null>(null);
+  const [customerFilter, setCustomerFilter] = useState("");
+  const [referenceFilter, setReferenceFilter] = useState("");
+  const [columnVisibility, setColumnVisibility] = useState(
+    defaultColumnVisibility,
+  );
+  const [kitchenVisibility, setKitchenVisibility] = useState<
+    Partial<Record<KitchenAreaId, boolean>>
+  >({});
+  const [showSyncAlerts, setShowSyncAlerts] = useState(true);
+  const [pageSize, setPageSize] = useState<4 | 6 | 8>(4);
+  const [columnPageByKey, setColumnPageByKey] = useState<
+    Record<string, number>
+  >({});
+  const deferredCustomerFilter = useDeferredValue(customerFilter);
+  const deferredReferenceFilter = useDeferredValue(referenceFilter);
 
   const boardQuery = useQuery(getBoardQueryOptions(initialData));
 
@@ -154,6 +222,38 @@ export function DashboardClient({
   const prioritizedKitchens = prioritizeKitchens(board.kitchens, activeKitchenId);
   const activeKitchen =
     board.kitchens.find((kitchen) => kitchen.id === activeKitchenId) ?? null;
+  const availableColumnToggles = prioritizedKitchens[0]?.columns.map((column) => ({
+    label: column.label,
+    status: column.status,
+  })) ?? [];
+  const normalizedCustomerFilter = normalizeFilterValue(deferredCustomerFilter);
+  const normalizedReferenceFilter = normalizeFilterValue(deferredReferenceFilter);
+  const hasActiveFilters =
+    normalizedCustomerFilter.length > 0 || normalizedReferenceFilter.length > 0;
+  const filteredKitchens = prioritizedKitchens
+    .filter((kitchen) => kitchenVisibility[kitchen.id] ?? true)
+    .map((kitchen) => ({
+      ...kitchen,
+      columns: kitchen.columns
+        .filter((column) => columnVisibility[column.status])
+        .map((column) => ({
+          ...column,
+          tickets: column.tickets.filter((ticket) =>
+            matchesTicketFilters(
+              ticket,
+              normalizedCustomerFilter,
+              normalizedReferenceFilter,
+            ),
+          ),
+        })),
+    }));
+  const visibleTickets = filteredKitchens.flatMap((kitchen) =>
+    kitchen.columns.flatMap((column) => column.tickets),
+  );
+  const visibleOrderCount = new Set(
+    visibleTickets.map((ticket) => ticket.orderId),
+  ).size;
+  const visibleKitchenCount = filteredKitchens.length;
 
   function openTicket(orderId: string) {
     startTransition(() => {
@@ -174,7 +274,8 @@ export function DashboardClient({
                 Produção sincronizada
               </span>
               <span className="rounded-full border border-[var(--panel-border)] bg-white/70 px-3 py-1 font-mono text-xs uppercase tracking-[0.22em] text-[var(--ink-soft)]">
-                Área ativa {activeKitchen?.name ?? activeKitchenId}
+                Área ativa{" "}
+                {localizeKitchenLabel(activeKitchen?.name ?? activeKitchenId)}
               </span>
             </div>
             <div className="space-y-2">
@@ -210,10 +311,8 @@ export function DashboardClient({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="font-mono text-xs uppercase tracking-[0.28em] text-[var(--ink-muted)]">
             Atualizado em{" "}
-            {new Date(board.generatedAt).toLocaleTimeString("pt-BR", {
-              hour: "2-digit",
-              minute: "2-digit",
-              second: "2-digit",
+            {formatOperationalTime(board.generatedAt, {
+              includeSeconds: true,
             })}
           </div>
 
@@ -229,91 +328,213 @@ export function DashboardClient({
               />
               Atualizar
             </Button>
+            <AreaSwitchButton />
           </div>
         </div>
+
+        <Card className="overflow-hidden border-[var(--panel-border-strong)] bg-[linear-gradient(180deg,rgba(255,255,255,0.94),rgba(247,241,231,0.98))]">
+          <div className="grid gap-4 px-5 py-5 lg:grid-cols-[1.1fr_0.9fr] lg:items-end">
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 text-[var(--ink-strong)]">
+                <Search className="size-4 text-[var(--accent-hot)]" />
+                <p className="font-display text-2xl uppercase tracking-[0.08em]">
+                  Localizar pedidos
+                </p>
+              </div>
+              <p className="max-w-2xl text-sm leading-6 text-[var(--ink-soft)]">
+                Filtre por cliente ou pela comanda para reduzir ruído no pico e
+                use o nome do garçom nos cards para identificar quem atendeu.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+              <span className="rounded-full border border-[var(--panel-border)] bg-white/85 px-4 py-2 font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
+                {visibleOrderCount} de {board.salonSummary.length} pedido(s)
+              </span>
+              <span className="rounded-full border border-[var(--panel-border)] bg-white/85 px-4 py-2 font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
+                {visibleTickets.length} ticket(s) visíveis
+              </span>
+              {hasActiveFilters ? (
+                <Button
+                  onClick={() => {
+                    setCustomerFilter("");
+                    setReferenceFilter("");
+                  }}
+                  size="sm"
+                  variant="ghost"
+                >
+                  <FilterX className="size-4" />
+                  Limpar filtros
+                </Button>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="grid gap-3 border-t border-[var(--panel-border)] px-5 py-5 xl:grid-cols-[1fr_1fr_auto_auto_auto]">
+            <label className="space-y-2">
+              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
+                Cliente / mesa
+              </span>
+              <Input
+                data-testid="board-filter-customer"
+                onChange={(event) => setCustomerFilter(event.target.value)}
+                placeholder="Ex.: Mesa 7 ou Carla"
+                value={customerFilter}
+              />
+            </label>
+
+            <label className="space-y-2">
+              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
+                Comanda
+              </span>
+              <Input
+                data-testid="board-filter-reference"
+                onChange={(event) => setReferenceFilter(event.target.value)}
+                placeholder="Ex.: 103"
+                value={referenceFilter}
+              />
+            </label>
+
+            <div className="space-y-2">
+              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
+                Tickets por lista
+              </span>
+              <div className="flex flex-wrap gap-2">
+                {[4, 6, 8].map((size) => (
+                  <Button
+                    className="min-w-14"
+                    data-testid={`board-page-size-${size}`}
+                    key={size}
+                    onClick={() => setPageSize(size as 4 | 6 | 8)}
+                    size="sm"
+                    variant={pageSize === size ? "default" : "secondary"}
+                  >
+                    {size}
+                  </Button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
+                Colunas do board
+              </span>
+              <div className="flex flex-wrap gap-2">
+                {availableColumnToggles.map((column) => {
+                  const visible = columnVisibility[column.status];
+
+                  return (
+                    <Button
+                      data-testid={`board-toggle-column-${column.status}`}
+                      key={column.status}
+                      onClick={() =>
+                        setColumnVisibility((current) => ({
+                          ...current,
+                          [column.status]: !current[column.status],
+                        }))
+                      }
+                      size="sm"
+                      variant={visible ? "default" : "secondary"}
+                    >
+                      {visible ? (
+                        <Eye className="size-4" />
+                      ) : (
+                        <EyeOff className="size-4" />
+                      )}
+                      {column.label}
+                    </Button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex min-w-[13rem] flex-col items-start gap-2">
+              <span className="block font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
+                Alertas operacionais
+              </span>
+              {board.openSyncExceptions > 0 ? (
+                <Button
+                  data-testid="board-toggle-sync-alerts"
+                  onClick={() => setShowSyncAlerts((current) => !current)}
+                  size="sm"
+                  variant={showSyncAlerts ? "default" : "secondary"}
+                >
+                  {showSyncAlerts ? (
+                    <Eye className="size-4" />
+                  ) : (
+                    <EyeOff className="size-4" />
+                  )}
+                  {showSyncAlerts ? "Ocultar alertas" : "Mostrar alertas"}
+                </Button>
+              ) : (
+                <div className="rounded-full border border-[var(--panel-border)] bg-white/75 px-4 py-2 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--ink-muted)]">
+                  Sem exceções ativas
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="border-t border-[var(--panel-border)] px-5 py-5">
+            <div className="space-y-2">
+              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
+                Cozinhas no painel
+              </span>
+              <div className="flex flex-wrap gap-2">
+                {prioritizedKitchens.map((kitchen) => {
+                  const visible = kitchenVisibility[kitchen.id] ?? true;
+
+                  return (
+                    <Button
+                      data-testid={`board-toggle-kitchen-${kitchen.id}`}
+                      key={kitchen.id}
+                      onClick={() =>
+                        setKitchenVisibility((current) => ({
+                          ...current,
+                          [kitchen.id]: !visible,
+                        }))
+                      }
+                      size="sm"
+                      variant={visible ? "default" : "secondary"}
+                    >
+                      {visible ? (
+                        <Eye className="size-4" />
+                      ) : (
+                        <EyeOff className="size-4" />
+                      )}
+                      {localizeKitchenLabel(kitchen.name)}
+                    </Button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </Card>
 
         {actionAuthFeedback ? (
           <ProtectedSurfaceBanner feedback={actionAuthFeedback} />
         ) : null}
 
-        {board.openSyncExceptions > 0 ? (
-          <Card
-            className="border-[color-mix(in_oklab,var(--accent-warm)_52%,white)] bg-[linear-gradient(135deg,color-mix(in_oklab,var(--accent-warm)_16%,white),rgba(255,255,255,0.96))] p-5"
-            data-testid="board-sync-alerts"
-          >
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div className="space-y-2">
-                <div className="flex items-center gap-2 text-[color-mix(in_oklab,var(--accent-warm)_84%,black)]">
-                  <TriangleAlert className="size-5" />
-                  <p className="font-display text-2xl uppercase tracking-[0.08em]">
-                    {board.openSyncExceptions} exceção(ões) de sync ativa(s)
-                  </p>
-                </div>
-                <p className="max-w-3xl text-sm leading-6 text-[var(--ink-soft)]">
-                  O board continua estável, mas estes pedidos precisam de
-                  conferência do salão ou atendimento antes da entrega final.
-                </p>
-              </div>
-            </div>
+        <section
+          className={cn(
+            "grid gap-5",
+            visibleKitchenCount > 1 && "2xl:grid-cols-2",
+          )}
+        >
+          {filteredKitchens.length === 0 ? (
+            <Card className="rounded-[1.8rem] border-dashed border-[var(--panel-border-strong)] bg-white/60 p-8 text-center text-[var(--ink-soft)] 2xl:col-span-2">
+              Nenhuma cozinha visível no painel. Use os botões com ícone de olho
+              para reexibir os cards.
+            </Card>
+          ) : null}
 
-            <div className="mt-4 grid gap-3 xl:grid-cols-2">
-              {board.syncAlerts.map((alert) => (
-                <div
-                  className="rounded-[1.5rem] border border-[color-mix(in_oklab,var(--accent-warm)_40%,white)] bg-white/80 px-4 py-4"
-                  data-testid={`sync-alert-${alert.id}`}
-                  key={alert.id}
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
-                        {alert.reference}
-                        {alert.customerName ? ` • ${alert.customerName}` : ""}
-                      </p>
-                      <p className="mt-1 text-base font-semibold text-[var(--ink-strong)]">
-                        {alert.label}
-                      </p>
-                    </div>
-                    <span className="rounded-full border border-[color-mix(in_oklab,var(--accent-warm)_48%,white)] bg-[color-mix(in_oklab,var(--accent-warm)_14%,white)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[color-mix(in_oklab,var(--accent-warm)_82%,black)]">
-                      {alert.statusLabel}
-                    </span>
-                  </div>
-
-                  <p className="mt-3 text-sm leading-6 text-[var(--ink-soft)]">
-                    {alert.summary}
-                  </p>
-                  {alert.detail ? (
-                    <p className="mt-2 text-xs uppercase tracking-[0.18em] text-[var(--ink-muted)]">
-                      {alert.detail}
-                    </p>
-                  ) : null}
-                  {hasAuthorizedOrderAccess(
-                    board,
-                    activeKitchenId,
-                    alert.orderId,
-                  ) ? (
-                    <div className="mt-4">
-                      <Button asChild size="sm" variant="secondary">
-                        <Link href={`/orders/${alert.orderId}?kitchen=${activeKitchenId}`}>
-                          Abrir pedido afetado
-                          <ArrowUpRight className="size-4" />
-                        </Link>
-                      </Button>
-                    </div>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          </Card>
-        ) : null}
-
-        <section className="grid gap-5 xl:grid-cols-2">
-          {prioritizedKitchens.map((kitchen) => {
+          {filteredKitchens.map((kitchen) => {
             const isActionKitchen = canManageKitchen(activeKitchenId, kitchen.id);
 
             return (
             <Card
               className={cn(
                 "overflow-hidden border-[var(--panel-border-strong)] bg-[linear-gradient(180deg,rgba(255,255,255,0.92),rgba(249,244,235,0.98))]",
+                visibleKitchenCount === 1 && "2xl:col-span-2",
                 isActionKitchen &&
                   "shadow-[0_20px_60px_rgba(34,30,25,0.12)] ring-1 ring-[color-mix(in_oklab,var(--accent-hot)_28%,transparent)]",
               )}
@@ -322,10 +543,10 @@ export function DashboardClient({
               <div className="flex items-end justify-between gap-4 border-b border-[var(--panel-border)] px-5 py-5">
                 <div>
                   <p className="font-mono text-xs uppercase tracking-[0.24em] text-[var(--ink-muted)]">
-                    {kitchen.description}
+                    {localizeKitchenDescription(kitchen.description)}
                   </p>
                   <h2 className="font-display text-4xl uppercase tracking-[0.08em] text-[var(--ink-strong)]">
-                    {kitchen.name}
+                    {localizeKitchenLabel(kitchen.name)}
                   </h2>
                 </div>
                 <span
@@ -340,75 +561,122 @@ export function DashboardClient({
                 </span>
               </div>
 
-              <div className="grid gap-4 p-4 md:grid-cols-2 2xl:grid-cols-4">
-                {kitchen.columns.map((column) => (
-                  <div className="flex min-h-[560px] flex-col gap-3" key={column.status}>
-                    <div className="flex items-center justify-between rounded-[1.4rem] border border-[var(--panel-border)] bg-[var(--panel-elevated)] px-4 py-3">
-                      <div>
-                        <p className="font-display text-2xl uppercase tracking-[0.08em]">
-                          {column.label}
-                        </p>
-                        <p className="font-mono text-xs uppercase tracking-[0.2em] text-[var(--ink-muted)]">
-                          {column.tickets.length} ticket(s)
-                        </p>
+              <div className="overflow-x-auto p-4 pb-5">
+                {kitchen.columns.length === 0 ? (
+                  <div className="rounded-[1.6rem] border border-dashed border-[var(--panel-border)] bg-white/70 px-6 py-12 text-center text-sm text-[var(--ink-soft)]">
+                    Nenhuma coluna visível nesta cozinha. Reative um status nos
+                    controles acima.
+                  </div>
+                ) : (
+                  <div
+                    className="grid min-w-full gap-4"
+                    style={{
+                      gridTemplateColumns: `repeat(${kitchen.columns.length}, minmax(${boardColumnMinWidthRem}rem, 1fr))`,
+                    }}
+                  >
+                  {kitchen.columns.map((column) => {
+                  const pageKey = getColumnPageKey(kitchen.id, column.status);
+                  const totalPages = Math.max(
+                    1,
+                    Math.ceil(column.tickets.length / pageSize),
+                  );
+                  const currentPage = Math.min(
+                    columnPageByKey[pageKey] ?? 1,
+                    totalPages,
+                  );
+                  const pageStartIndex = (currentPage - 1) * pageSize;
+                  const paginatedTickets = column.tickets.slice(
+                    pageStartIndex,
+                    pageStartIndex + pageSize,
+                  );
+                  const pageEndIndex =
+                    column.tickets.length === 0
+                      ? 0
+                      : pageStartIndex + paginatedTickets.length;
+
+                  return (
+                    <div
+                      className="flex min-h-[560px] flex-col gap-3"
+                      data-testid={`board-column-${kitchen.id}-${column.status}`}
+                      key={column.status}
+                    >
+                      <div className="flex items-center justify-between rounded-[1.4rem] border border-[var(--panel-border)] bg-[var(--panel-elevated)] px-4 py-3">
+                        <div>
+                          <p className="font-display text-2xl uppercase tracking-[0.08em]">
+                            {column.label}
+                          </p>
+                          <p className="font-mono text-xs uppercase tracking-[0.2em] text-[var(--ink-muted)]">
+                            {column.tickets.length} ticket(s)
+                          </p>
+                        </div>
                       </div>
-                    </div>
 
-                    <ScrollArea className="h-[520px] rounded-[1.6rem] border border-[var(--panel-border)] bg-[var(--panel)] p-1">
-                      <div className="space-y-3 p-2">
-                        {column.tickets.length === 0 ? (
-                          <div className="rounded-[1.4rem] border border-dashed border-[var(--panel-border)] px-4 py-8 text-center text-sm text-[var(--ink-muted)]">
-                            Nenhum pedido nesta coluna.
-                          </div>
-                        ) : (
-                          column.tickets.map((ticket) => {
-                            const busy =
-                              busyTicketId === `${ticket.orderId}:${ticket.kitchenId}`;
+                      <ScrollArea
+                        className="h-[clamp(18rem,calc(100dvh-24rem),32.5rem)] rounded-[1.6rem] border border-[var(--panel-border)] bg-[var(--panel)] p-1"
+                        viewportClassName="touch-pan-y"
+                      >
+                        <div className="space-y-3 p-2">
+                          {paginatedTickets.length === 0 ? (
+                            <div className="rounded-[1.4rem] border border-dashed border-[var(--panel-border)] px-4 py-8 text-center text-sm text-[var(--ink-muted)]">
+                              {hasActiveFilters
+                                ? "Nenhum pedido com estes filtros."
+                                : "Nenhum pedido nesta coluna."}
+                            </div>
+                          ) : (
+                            paginatedTickets.map((ticket) => {
+                              const busy =
+                                busyTicketId === `${ticket.orderId}:${ticket.kitchenId}`;
 
-                            return (
-                              <div
-                                className="w-full"
-                                data-testid={`ticket-card-${ticket.ticketId}`}
-                                key={ticket.ticketId}
-                                onClick={
-                                  isActionKitchen
-                                    ? () => openTicket(ticket.orderId)
-                                    : undefined
-                                }
-                                onKeyDown={
-                                  isActionKitchen
-                                    ? (event) => {
-                                        if (
-                                          event.key === "Enter" ||
-                                          event.key === " "
-                                        ) {
-                                          event.preventDefault();
-                                          openTicket(ticket.orderId);
+                              return (
+                                <div
+                                  className="min-w-0 w-full"
+                                  data-testid={`ticket-card-${ticket.ticketId}`}
+                                  key={ticket.ticketId}
+                                  onClick={
+                                    isActionKitchen
+                                      ? () => openTicket(ticket.orderId)
+                                      : undefined
+                                  }
+                                  onKeyDown={
+                                    isActionKitchen
+                                      ? (event) => {
+                                          if (
+                                            event.key === "Enter" ||
+                                            event.key === " "
+                                          ) {
+                                            event.preventDefault();
+                                            openTicket(ticket.orderId);
+                                          }
                                         }
-                                      }
-                                    : undefined
-                                }
-                                role={isActionKitchen ? "button" : undefined}
-                                tabIndex={isActionKitchen ? 0 : undefined}
-                              >
-                                <Card
-                                  className={cn(
-                                    "space-y-4 rounded-[1.6rem] border-[var(--panel-border)] bg-[rgba(255,255,255,0.9)] p-4 transition",
-                                    isActionKitchen &&
-                                      "hover:-translate-y-0.5 hover:border-[var(--panel-border-strong)] focus-within:border-[var(--panel-border-strong)]",
-                                    isActionKitchen ? "cursor-pointer" : "cursor-default",
-                                    ticket.hasOpenSyncException &&
-                                      "border-[color-mix(in_oklab,var(--accent-warm)_52%,white)] bg-[color-mix(in_oklab,var(--accent-warm)_7%,white)]",
-                                  )}
+                                      : undefined
+                                  }
+                                  role={isActionKitchen ? "button" : undefined}
+                                  tabIndex={isActionKitchen ? 0 : undefined}
                                 >
+                                  <Card
+                                    className={cn(
+                                      "min-w-0 space-y-4 rounded-[1.6rem] border-[var(--panel-border)] bg-[rgba(255,255,255,0.9)] p-4 transition",
+                                      isActionKitchen &&
+                                        "hover:-translate-y-0.5 hover:border-[var(--panel-border-strong)] focus-within:border-[var(--panel-border-strong)]",
+                                      isActionKitchen ? "cursor-pointer" : "cursor-default",
+                                      ticket.hasOpenSyncException &&
+                                        "border-[color-mix(in_oklab,var(--accent-warm)_52%,white)] bg-[color-mix(in_oklab,var(--accent-warm)_7%,white)]",
+                                    )}
+                                  >
                                   <div className="flex flex-wrap items-start justify-between gap-3">
                                     <div>
                                       <p className="font-mono text-xs uppercase tracking-[0.22em] text-[var(--ink-muted)]">
-                                        {ticket.reference}
+                                        Comanda {ticket.reference}
                                       </p>
                                       <h3 className="font-display text-3xl uppercase tracking-[0.08em] text-[var(--ink-strong)]">
                                         {ticket.customerName ?? "Sem nome"}
                                       </h3>
+                                      <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-[var(--ink-soft)]">
+                                        <UserRound className="size-4 text-[var(--accent-hot)]" />
+                                        {ticket.waiterName
+                                          ? `Garçom ${ticket.waiterName}`
+                                          : "Garçom não informado"}
+                                      </p>
                                     </div>
 
                                     <div className="flex flex-col items-end gap-2">
@@ -516,7 +784,10 @@ export function DashboardClient({
                                       />
                                       {ticket.otherKitchenStatus ? (
                                         <p className="text-xs text-[var(--ink-soft)]">
-                                          {ticket.otherKitchenName}:{" "}
+                                          {localizeKitchenLabel(
+                                            ticket.otherKitchenName ?? "Outra cozinha",
+                                          )}
+                                          :{" "}
                                           <span className="font-semibold">
                                             {ticket.otherKitchenStatus}
                                           </span>
@@ -576,14 +847,131 @@ export function DashboardClient({
                           })
                         )}
                       </div>
-                    </ScrollArea>
+                      </ScrollArea>
+                      <div className="flex items-center justify-between rounded-[1.2rem] border border-[var(--panel-border)] bg-white/80 px-4 py-3">
+                        <p
+                          className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]"
+                          data-testid={`board-column-page-${kitchen.id}-${column.status}`}
+                        >
+                          {column.tickets.length === 0
+                            ? "Sem tickets"
+                            : `Mostrando ${pageStartIndex + 1}-${pageEndIndex} de ${column.tickets.length}`}
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            disabled={currentPage <= 1}
+                            onClick={() =>
+                              setColumnPageByKey((current) => ({
+                                ...current,
+                                [pageKey]: Math.max(1, currentPage - 1),
+                              }))
+                            }
+                            size="sm"
+                            variant="ghost"
+                          >
+                            <ChevronLeft className="size-4" />
+                            Anterior
+                          </Button>
+                          <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
+                            {currentPage}/{totalPages}
+                          </span>
+                          <Button
+                            disabled={currentPage >= totalPages}
+                            onClick={() =>
+                              setColumnPageByKey((current) => ({
+                                ...current,
+                                [pageKey]: Math.min(totalPages, currentPage + 1),
+                              }))
+                            }
+                            size="sm"
+                            variant="ghost"
+                          >
+                            Próxima
+                            <ChevronRight className="size-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                  })}
                   </div>
-                ))}
+                )}
               </div>
             </Card>
             );
           })}
         </section>
+
+        {board.openSyncExceptions > 0 && showSyncAlerts ? (
+          <Card
+            className="border-[color-mix(in_oklab,var(--accent-warm)_52%,white)] bg-[linear-gradient(135deg,color-mix(in_oklab,var(--accent-warm)_16%,white),rgba(255,255,255,0.96))] p-5"
+            data-testid="board-sync-alerts"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-[color-mix(in_oklab,var(--accent-warm)_84%,black)]">
+                  <TriangleAlert className="size-5" />
+                  <p className="font-display text-2xl uppercase tracking-[0.08em]">
+                    {board.openSyncExceptions} exceção(ões) de sync ativa(s)
+                  </p>
+                </div>
+                <p className="max-w-3xl text-sm leading-6 text-[var(--ink-soft)]">
+                  O board continua estável, mas estes pedidos precisam de
+                  conferência do salão ou atendimento antes da entrega final.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-3 xl:grid-cols-2">
+              {board.syncAlerts.map((alert) => (
+                <div
+                  className="rounded-[1.5rem] border border-[color-mix(in_oklab,var(--accent-warm)_40%,white)] bg-white/80 px-4 py-4"
+                  data-testid={`sync-alert-${alert.id}`}
+                  key={alert.id}
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
+                        {alert.reference}
+                        {alert.customerName ? ` • ${alert.customerName}` : ""}
+                        {alert.waiterName ? ` • Garçom ${alert.waiterName}` : ""}
+                      </p>
+                      <p className="mt-1 text-base font-semibold text-[var(--ink-strong)]">
+                        {alert.label}
+                      </p>
+                    </div>
+                    <span className="rounded-full border border-[color-mix(in_oklab,var(--accent-warm)_48%,white)] bg-[color-mix(in_oklab,var(--accent-warm)_14%,white)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[color-mix(in_oklab,var(--accent-warm)_82%,black)]">
+                      {alert.statusLabel}
+                    </span>
+                  </div>
+
+                  <p className="mt-3 text-sm leading-6 text-[var(--ink-soft)]">
+                    {alert.summary}
+                  </p>
+                  {alert.detail ? (
+                    <p className="mt-2 text-xs uppercase tracking-[0.18em] text-[var(--ink-muted)]">
+                      {alert.detail}
+                    </p>
+                  ) : null}
+                  {hasAuthorizedOrderAccess(
+                    board,
+                    activeKitchenId,
+                    alert.orderId,
+                  ) ? (
+                    <div className="mt-4">
+                      <Button asChild size="sm" variant="secondary">
+                        <Link href={`/orders/${alert.orderId}?kitchen=${activeKitchenId}`}>
+                          Abrir pedido afetado
+                          <ArrowUpRight className="size-4" />
+                        </Link>
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </Card>
+        ) : null}
       </div>
     </main>
   );

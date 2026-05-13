@@ -1,10 +1,12 @@
-import { NextResponse } from "next/server";
-
 import {
   forbiddenAreaResponse,
   type AreaAccessRouteDependencies,
   withKitchenArea,
 } from "@/app/api/_lib/area-access-route";
+import {
+  jsonNoStore,
+  readJsonObject,
+} from "@/app/api/_lib/provider-sync-route";
 import type { ProductionRepository } from "@/src/application/ports";
 import {
   completeTicketProduction,
@@ -33,11 +35,21 @@ export function handlePatchKitchenTicket(
   },
 ) {
   if (!isKitchenId(kitchenId)) {
-    return NextResponse.json("Invalid kitchen", { status: 400 });
+    return jsonNoStore("Invalid kitchen", { status: 400 });
   }
 
   if (action !== "start" && action !== "complete") {
-    return NextResponse.json("Invalid action", { status: 400 });
+    return jsonNoStore("Invalid action", { status: 400 });
+  }
+
+  const aggregate = repository.getOrderAggregate(orderId);
+
+  if (!aggregate) {
+    return jsonNoStore("Order not found", { status: 404 });
+  }
+
+  if (!aggregate.tickets.some((ticket) => ticket.kitchenId === kitchenId)) {
+    return jsonNoStore("Kitchen ticket not found", { status: 404 });
   }
 
   if (action === "start") {
@@ -46,9 +58,8 @@ export function handlePatchKitchenTicket(
     completeTicketProduction(repository, orderId, kitchenId);
   }
 
-  return NextResponse.json(
+  return jsonNoStore(
     { ok: true },
-    { headers: { "Cache-Control": "no-store" } },
   );
 }
 
@@ -70,12 +81,19 @@ export async function handlePatchKitchenTicketRoute(
         return forbiddenAreaResponse();
       }
 
-      const body = (await request.json()) as { action?: string };
+      const bodyResult = await readJsonObject(request);
+
+      if (!bodyResult.ok) {
+        return bodyResult.response;
+      }
 
       return handlePatchKitchenTicket(
         dependencies.repository ?? getProductionRepository(),
         {
-          action: body.action,
+          action:
+            typeof bodyResult.value.action === "string"
+              ? bodyResult.value.action
+              : undefined,
           kitchenId,
           orderId,
         },

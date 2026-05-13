@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  createCatalogAdminProvider,
+  createConfiguredCatalogAdminProvider,
   createConfiguredOrderSyncProvider,
   createOrderSyncProvider,
   orderSyncProviderEnv,
@@ -98,5 +100,136 @@ describe("order sync provider factory", () => {
         mode: "legacy" as never,
       }),
     ).toThrowError(/unsupported order sync provider mode/i);
+  });
+
+  it("creates a provider-agnostic catalog admin capability from the same mode selection", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith("/v2/nm-category/rest/simple-item/export/v2")) {
+        return createJsonResponse({
+          success: true,
+          message: "Menu exportado com sucesso.",
+          data: [
+            {
+              title: "Lanches",
+              id: "category-1",
+              itens: [
+                {
+                  id: "catalog-item-1",
+                  title: "Club Sandwich",
+                  external_id: "club-sandwich",
+                  updatedAt: "2026-05-12T12:00:00.000Z",
+                },
+              ],
+            },
+          ],
+        });
+      }
+
+      if (url.endsWith("/v2/item/external-id/provider-item-1")) {
+        expect(init?.method).toBe("PUT");
+        expect(init?.body).toBe(
+          JSON.stringify({
+            document: {
+              external_id: "uuid-1",
+            },
+          }),
+        );
+
+        return createJsonResponse({
+          success: true,
+          message: "External ID atualizado com sucesso.",
+        });
+      }
+
+      throw new Error(`unexpected url ${url}`);
+    });
+    const provider = createConfiguredCatalogAdminProvider({
+      [orderSyncProviderEnv.mode]: "anota_ai",
+      [orderSyncProviderEnv.anotaAiToken]: "token-real",
+    }, {
+      fetch: fetchMock as typeof fetch,
+    });
+
+    expect(provider.providerName()).toBe("anota_ai");
+    expect(provider.getCatalogExternalIdSupport()).toEqual(
+      expect.objectContaining({
+        provider: "anota_ai",
+        mode: "api_write",
+        actionLabel: expect.any(String),
+      }),
+    );
+    await expect(provider.listCatalogItems({ limit: 10 })).resolves.toEqual([
+      expect.objectContaining({
+        providerItemId: "catalog-item-1",
+        providerExternalId: "club-sandwich",
+        name: "Club Sandwich",
+      }),
+    ]);
+    await expect(
+      provider.publishExternalId({
+        providerItemId: "provider-item-1",
+        externalId: "uuid-1",
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        status: "published",
+      }),
+    );
+  });
+
+  it("uses the dedicated Anota menu base by default for catalog reads even when the order base is configured", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      expect(url).toBe(
+        "https://api-menu.anota.ai/partnerauth/v2/nm-category/rest/simple-item/export/v2",
+      );
+
+      return createJsonResponse({
+        success: true,
+        data: [
+          {
+            title: "Bebidas",
+            itens: [
+              {
+                id: "catalog-item-1",
+                title: "Cappuccino",
+                external_id: "cappuccino",
+                updatedAt: "2026-05-12T12:00:00.000Z",
+              },
+            ],
+          },
+        ],
+      });
+    });
+    const provider = createConfiguredCatalogAdminProvider(
+      {
+        [orderSyncProviderEnv.mode]: "anota_ai",
+        [orderSyncProviderEnv.anotaAiBaseUrl]:
+          "https://api-parceiros.anota.ai/partnerauth",
+        [orderSyncProviderEnv.anotaAiToken]: "token-real",
+      },
+      {
+        fetch: fetchMock as typeof fetch,
+      },
+    );
+
+    await expect(provider.listCatalogItems({ limit: 10 })).resolves.toEqual([
+      expect.objectContaining({
+        providerItemId: "catalog-item-1",
+        providerExternalId: "cappuccino",
+        name: "Cappuccino",
+      }),
+    ]);
+  });
+
+  it("rejects unsupported catalog admin provider modes", () => {
+    expect(() =>
+      createCatalogAdminProvider({
+        mode: "legacy" as never,
+      }),
+    ).toThrowError(/unsupported catalog admin provider mode/i);
   });
 });

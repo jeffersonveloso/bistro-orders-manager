@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-
 import type { AreaAccessPolicyConfig } from "@/src/application/area-access-service";
 import {
   AREA_SESSION_VERSION,
@@ -39,6 +38,15 @@ export type AreaSessionVerificationResult =
       reason: AreaSessionVerificationFailureReason;
     };
 
+interface AreaSessionCookieOptions {
+  expires?: Date;
+  httpOnly: true;
+  maxAge: number;
+  path: "/";
+  sameSite: "lax";
+  secure: boolean;
+}
+
 export class AreaAccessConfigurationError extends Error {
   constructor(message: string) {
     super(message);
@@ -77,6 +85,34 @@ export function loadAreaAccessRuntimeConfig(
     sessionTtlMs,
     sessionTtlSeconds,
   };
+}
+
+export function getAreaRequestOrigin(
+  request: Pick<Request, "headers" | "url">,
+) {
+  const requestUrl = new URL(request.url);
+  const forwardedProto = request.headers.get("x-forwarded-proto");
+  const forwardedHost =
+    request.headers.get("x-forwarded-host") ?? request.headers.get("host");
+
+  if (!forwardedHost) {
+    return requestUrl.origin;
+  }
+
+  return `${forwardedProto ?? requestUrl.protocol.replace(":", "")}://${forwardedHost}`;
+}
+
+export function shouldUseSecureAreaCookies(
+  request: Pick<Request, "headers" | "url">,
+  defaultSecureCookies: boolean,
+) {
+  if (!defaultSecureCookies) {
+    return false;
+  }
+
+  const origin = new URL(getAreaRequestOrigin(request));
+
+  return origin.protocol === "https:";
 }
 
 export function signAreaSession(
@@ -189,13 +225,11 @@ export function createAreaSessionCookie(
     "cookieName" | "secureCookies" | "sessionSecret" | "sessionTtlSeconds"
   >,
 ) {
-  return serializeCookie(config.cookieName, signAreaSession(session, config), {
-    httpOnly: true,
-    maxAge: config.sessionTtlSeconds,
-    path: "/",
-    sameSite: "Lax",
-    secure: config.secureCookies,
-  });
+  return serializeCookie(
+    config.cookieName,
+    signAreaSession(session, config),
+    createAreaSessionCookieOptions(config),
+  );
 }
 
 export function clearAreaSessionCookie(
@@ -204,14 +238,32 @@ export function clearAreaSessionCookie(
     secureCookies: true,
   },
 ) {
-  return serializeCookie(config.cookieName, "", {
+  return serializeCookie(config.cookieName, "", createClearedAreaSessionCookieOptions(config));
+}
+
+export function createAreaSessionCookieOptions(
+  config: Pick<AreaAccessRuntimeConfig, "secureCookies" | "sessionTtlSeconds">,
+): AreaSessionCookieOptions {
+  return {
+    httpOnly: true,
+    maxAge: config.sessionTtlSeconds,
+    path: "/",
+    sameSite: "lax",
+    secure: config.secureCookies,
+  };
+}
+
+export function createClearedAreaSessionCookieOptions(
+  config: Pick<AreaAccessRuntimeConfig, "secureCookies">,
+): AreaSessionCookieOptions {
+  return {
     expires: new Date(0),
     httpOnly: true,
     maxAge: 0,
     path: "/",
-    sameSite: "Lax",
+    sameSite: "lax",
     secure: config.secureCookies,
-  });
+  };
 }
 
 export function shouldRenewAreaSession(
@@ -364,7 +416,7 @@ function serializeCookie(
     httpOnly?: boolean;
     maxAge?: number;
     path?: string;
-    sameSite?: "Lax" | "Strict" | "None";
+    sameSite?: "Lax" | "Strict" | "None" | "lax" | "strict" | "none";
     secure?: boolean;
   },
 ) {
@@ -387,7 +439,9 @@ function serializeCookie(
   }
 
   if (options.sameSite) {
-    parts.push(`SameSite=${options.sameSite}`);
+    parts.push(
+      `SameSite=${options.sameSite.slice(0, 1).toUpperCase()}${options.sameSite.slice(1).toLowerCase()}`,
+    );
   }
 
   if (options.secure) {

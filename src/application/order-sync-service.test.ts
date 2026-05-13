@@ -53,7 +53,7 @@ describe("syncOrders", () => {
           externalId: "invalid-1",
           reference: "Pedido Inválido",
           reason: "missing_kitchen_mapping",
-          menuItemId: "not-mapped",
+          providerExternalId: "not-mapped",
           menuItemName: "Sem mapeamento",
         },
       ]);
@@ -112,6 +112,7 @@ describe("syncOrders", () => {
             externalId: "noop",
             reference: "noop",
             customerName: null,
+            waiterName: null,
             source: "test",
             createdAt: "2026-05-11T10:00:00.000Z",
             updatedAt: "2026-05-11T10:00:00.000Z",

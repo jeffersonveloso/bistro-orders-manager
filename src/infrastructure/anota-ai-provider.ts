@@ -1,7 +1,12 @@
-import type { OrderSyncProviderPort } from "@/src/application/ports";
+import type {
+  CatalogAdminProviderPort,
+  OrderSyncProviderPort,
+} from "@/src/application/ports";
 import type { RawProviderOrderInput } from "@/src/domain/production";
 import type {
+  ListCatalogItemsInput,
   ListConfirmedOrdersInput,
+  ProviderCatalogItem,
   ProviderOrderLifecycle,
   ProviderOrderSnapshot,
   ProviderOrderSnapshotItem,
@@ -10,6 +15,11 @@ import type {
 
 const DEFAULT_ANOTA_AI_BASE_URL =
   "https://api-parceiros.anota.ai/partnerauth";
+const DEFAULT_ANOTA_AI_CATALOG_BASE_URL =
+  "https://api-menu.anota.ai/partnerauth";
+const DEFAULT_ANOTA_AI_CATALOG_LIST_PATHS = [
+  "v2/nm-category/rest/simple-item/export/v2",
+] as const;
 
 type FetchLike = typeof fetch;
 
@@ -28,6 +38,7 @@ interface NormalizedAnotaOrderListEntry {
 
 interface AnotaAiProviderConfig {
   baseUrl?: string;
+  catalogListPath?: string;
   fetch?: FetchLike;
   token: string;
 }
@@ -193,6 +204,130 @@ export function createAnotaAiProvider(
   };
 }
 
+export function createAnotaAiCatalogAdminProvider(
+  config: AnotaAiProviderConfig,
+): CatalogAdminProviderPort {
+  const fetchImpl = config.fetch ?? fetch;
+  const token = readOptionalString(config.token);
+  const baseUrl = normalizeCatalogBaseUrl(config.baseUrl);
+  const catalogListPaths = resolveAnotaCatalogListPaths(config.catalogListPath);
+
+  return {
+    providerName() {
+      return "anota_ai";
+    },
+    getCatalogExternalIdSupport() {
+      return {
+        provider: "anota_ai",
+        providerLabel: "Anota AI",
+        mode: "api_write",
+        actionLabel: "Publicar external ID na Anota AI",
+        summary:
+          "O sistema gera o ID do bistrô, salva o binding local e pode publicar o external ID diretamente na Anota AI quando o item do provider já é conhecido.",
+        helpUrl: "https://anota.ai/ajuda/cardapio-da-anota-ai/",
+        instructions: [
+          "O sistema usa o item_id real do catálogo para publicar o external ID do bistrô.",
+          "Se a publicação automática falhar, revise o item no Gestor de Cardápio da Anota AI e confirme se ele continua ativo.",
+          "Depois rode um novo pull do catálogo para validar a leitura do external ID já publicado.",
+        ],
+      };
+    },
+    async listCatalogItems(input: ListCatalogItemsInput) {
+      const limit = normalizeRequestedLimit(input.limit);
+      const updatedSince =
+        typeof input.updatedSince === "string"
+          ? normalizeDateTime(
+              input.updatedSince,
+              "listCatalogItems.updatedSince",
+            )
+          : undefined;
+      let lastUnsupportedError: Error | null = null;
+
+      for (const catalogPath of catalogListPaths) {
+        try {
+          const items = await fetchAnotaCatalogItems({
+            baseUrl,
+            catalogPath,
+            fetchImpl,
+            limit,
+            token: requireNonBlankString(
+              token,
+              "Anota AI provider token is required to list catalog items",
+            ),
+            updatedSince,
+          });
+
+          return items;
+        } catch (error) {
+          if (
+            error instanceof UnsupportedAnotaPayloadError ||
+            (error instanceof AnotaAiProviderError &&
+              error.code === "catalog_endpoint_not_supported")
+          ) {
+            lastUnsupportedError =
+              error instanceof Error ? error : new Error(String(error));
+            continue;
+          }
+
+          throw error;
+        }
+      }
+
+      throw (
+        lastUnsupportedError ??
+        new AnotaAiProviderError(
+          "catalog_endpoint_not_supported",
+          "Unable to list catalog items from Anota AI with the configured adapter paths.",
+        )
+      );
+    },
+    async publishExternalId(input) {
+      const normalizedToken = requireNonBlankString(
+        token,
+        "Anota AI provider token is required to publish catalog external IDs",
+      );
+      const response = await fetchImpl(
+        buildAnotaItemExternalIdUrl(baseUrl, input.providerItemId),
+        {
+          method: "PUT",
+          headers: buildAnotaHeaders(normalizedToken),
+          body: JSON.stringify({
+            document: {
+              external_id: input.externalId,
+            },
+          }),
+        },
+      );
+      const payload = await parseAnotaResponseBody(
+        response,
+        `publish external id for item "${input.providerItemId}"`,
+      );
+
+      if (!isPlainObject(payload)) {
+        throw new UnsupportedAnotaPayloadError(
+          `Anota AI external ID publish returned an unsupported response for item "${input.providerItemId}"`,
+        );
+      }
+
+      if (payload.success !== true) {
+        throw new AnotaAiProviderError(
+          "publish_external_id_failed",
+          `Anota AI external ID publish failed for item "${
+            input.providerItemId
+          }"${
+            typeof payload.message === "string" ? `: ${payload.message}` : ""
+          }`,
+        );
+      }
+
+      return {
+        status: "published",
+        providerMessage: extractProviderMessage(payload) ?? "External ID publicado na Anota AI.",
+      };
+    },
+  };
+}
+
 export function mapAnotaOrderCheck(
   check: unknown,
 ): AnotaOrderCheckMapping & { check: AnotaOrderCheckCode } {
@@ -208,6 +343,250 @@ export function mapAnotaOrderCheck(
   return {
     check: numericCheck,
     ...mapping,
+  };
+}
+
+async function fetchAnotaCatalogItems({
+  baseUrl,
+  catalogPath,
+  fetchImpl,
+  limit,
+  token,
+  updatedSince,
+}: {
+  baseUrl: string;
+  catalogPath: string;
+  fetchImpl: FetchLike;
+  limit: number;
+  token: string;
+  updatedSince?: string;
+}): Promise<ProviderCatalogItem[]> {
+  let currentPage = 1;
+  let totalPages = Number.POSITIVE_INFINITY;
+  const items: ProviderCatalogItem[] = [];
+
+  while (items.length < limit && currentPage <= totalPages) {
+    const response = await fetchImpl(
+      buildAnotaCatalogListUrl(baseUrl, catalogPath, currentPage),
+      {
+        headers: buildAnotaHeaders(token),
+      },
+    );
+
+    if (response.status === 404 || response.status === 422) {
+      throw new AnotaAiProviderError(
+        "catalog_endpoint_not_supported",
+        `Anota AI catalog list path "${catalogPath}" is not available in this environment.`,
+      );
+    }
+
+    const payload = await parseAnotaResponseBody(
+      response,
+      `list catalog items via "${catalogPath}"`,
+    );
+    const page = normalizeAnotaCatalogList(payload, catalogPath);
+    totalPages = Math.max(1, Math.ceil(page.count / Math.max(1, page.limit)));
+
+    for (const item of page.items) {
+      if (
+        typeof updatedSince === "string" &&
+        item.updatedAt.localeCompare(updatedSince) < 0
+      ) {
+        continue;
+      }
+
+      items.push(item);
+
+      if (items.length >= limit) {
+        break;
+      }
+    }
+
+    currentPage += 1;
+  }
+
+  return items;
+}
+
+function normalizeAnotaCatalogList(
+  payload: unknown,
+  catalogPath: string,
+): { count: number; items: ProviderCatalogItem[]; limit: number } {
+  const arrayPayloadEntries = extractCatalogEntryCandidates(payload);
+
+  if (arrayPayloadEntries.length > 0) {
+    return {
+      count: arrayPayloadEntries.length,
+      items: arrayPayloadEntries.map((entry, index) =>
+        normalizeAnotaCatalogItem(entry, index, catalogPath),
+      ),
+      limit: arrayPayloadEntries.length || 1,
+    };
+  }
+
+  const response = requirePlainObject(
+    payload,
+    `Anota AI catalog list response for "${catalogPath}" must be an object`,
+  );
+
+  if ("success" in response && response.success !== true) {
+    throw new UnsupportedAnotaPayloadError(
+      `Anota AI catalog list response failed for "${catalogPath}"${
+        typeof response.message === "string" ? `: ${response.message}` : ""
+      }`,
+    );
+  }
+
+  const info = isPlainObject(response.info) ? response.info : response;
+  const entries = firstCatalogEntryCandidates([
+    info.docs,
+    info.itens,
+    info.items,
+    info.products,
+    info.data,
+    info.categories,
+    response.docs,
+    response.itens,
+    response.items,
+    response.products,
+    response.data,
+    response.categories,
+  ]);
+
+  if (!entries) {
+    throw new UnsupportedAnotaPayloadError(
+      `Anota AI catalog list response for "${catalogPath}" does not contain a supported items array`,
+    );
+  }
+
+  return {
+    count: normalizeOptionalCount(info.count) ?? entries.length,
+    items: entries.map((entry, index) =>
+      normalizeAnotaCatalogItem(entry, index, catalogPath),
+    ),
+    limit: (normalizeOptionalCount(info.limit) ?? entries.length) || 1,
+  };
+}
+
+function firstCatalogEntryCandidates(values: unknown[]) {
+  for (const value of values) {
+    const candidates = extractCatalogEntryCandidates(value);
+
+    if (candidates.length > 0) {
+      return candidates;
+    }
+  }
+
+  return undefined;
+}
+
+function extractCatalogEntryCandidates(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const directEntries = value.filter(isDirectCatalogItemCandidate);
+
+  if (directEntries.length > 0) {
+    return directEntries;
+  }
+
+  const nestedEntries: Record<string, unknown>[] = [];
+
+  for (const entry of value) {
+    if (!isPlainObject(entry)) {
+      continue;
+    }
+
+    for (const nestedKey of [
+      "items",
+      "itens",
+      "products",
+      "docs",
+      "data",
+      "categories",
+      "children",
+    ] as const) {
+      nestedEntries.push(...extractCatalogEntryCandidates(entry[nestedKey]));
+    }
+  }
+
+  return nestedEntries;
+}
+
+function isDirectCatalogItemCandidate(
+  value: unknown,
+): value is Record<string, unknown> {
+  if (!isPlainObject(value)) {
+    return false;
+  }
+
+  const hasNestedCollections =
+    Array.isArray(value.itens) ||
+    Array.isArray(value.items) ||
+    Array.isArray(value.products) ||
+    Array.isArray(value.docs) ||
+    Array.isArray(value.data) ||
+    Array.isArray(value.categories) ||
+    Array.isArray(value.children);
+
+  if (hasNestedCollections) {
+    return false;
+  }
+
+  return Boolean(
+    readOptionalCatalogItemId(value) &&
+      (readOptionalString(value.name) ??
+        readOptionalString(value.title) ??
+        readOptionalString(value.description)),
+  );
+}
+
+function normalizeAnotaCatalogItem(
+  entry: unknown,
+  index: number,
+  catalogPath: string,
+): ProviderCatalogItem {
+  const item = requirePlainObject(
+    entry,
+    `Anota AI catalog item #${index + 1} from "${catalogPath}" must be an object`,
+  );
+  const providerItemId = readOptionalCatalogItemId(item, {
+    allowOwnIdFallback: true,
+  });
+  const name =
+    readOptionalString(item.name) ??
+    readOptionalString(item.title) ??
+    readOptionalString(item.description);
+
+  if (!providerItemId) {
+    throw new UnsupportedAnotaPayloadError(
+      `Anota AI catalog item #${index + 1} from "${catalogPath}" is missing a supported identifier`,
+    );
+  }
+
+  if (!name) {
+    throw new UnsupportedAnotaPayloadError(
+      `Anota AI catalog item #${index + 1} from "${catalogPath}" is missing a supported name`,
+    );
+  }
+
+  return {
+    provider: "anota_ai",
+    providerItemId,
+    providerExternalId:
+      readOptionalString(item.externalId) ??
+      readOptionalString(item.external_id) ??
+      readOptionalString(item.externalID) ??
+      null,
+    name,
+    updatedAt:
+      normalizeOptionalDateTime(item.updatedAt) ??
+      normalizeOptionalDateTime(item.updated_at) ??
+      normalizeOptionalDateTime(item.createdAt) ??
+      normalizeOptionalDateTime(item.created_at) ??
+      new Date(0).toISOString(),
+    rawPayload: item,
   };
 }
 
@@ -245,10 +624,15 @@ export function normalizeAnotaOrderSnapshot(
     ),
     `Anota AI order "${externalOrderId}" updatedAt`,
   );
-  const items = normalizeAnotaOrderItems(info.items, externalOrderId);
+  const items = normalizeSnapshotItemsForLifecycle(
+    info.items,
+    checkMapping.lifecycle,
+    externalOrderId,
+  );
   const customerName = readOptionalString(
     info.customer && isPlainObject(info.customer) ? info.customer.name : undefined,
   );
+  const waiterName = readAssignedWaiterName(info);
   const channel =
     readOptionalString(info.salesChannel) ??
     readOptionalString(info.from) ??
@@ -266,6 +650,7 @@ export function normalizeAnotaOrderSnapshot(
     externalOrderId,
     reference,
     customerName,
+    waiterName,
     channel,
     providerStatus: checkMapping.providerStatus,
     lifecycle: checkMapping.lifecycle,
@@ -276,6 +661,24 @@ export function normalizeAnotaOrderSnapshot(
   };
 }
 
+function normalizeSnapshotItemsForLifecycle(
+  items: unknown,
+  lifecycle: ProviderOrderLifecycle,
+  externalOrderId: string,
+) {
+  if (typeof items === "undefined" || items === null) {
+    if (lifecycle !== "confirmed_ready") {
+      return [];
+    }
+
+    throw new UnsupportedAnotaPayloadError(
+      `Anota AI order "${externalOrderId}" items must be an array`,
+    );
+  }
+
+  return normalizeAnotaOrderItems(items, externalOrderId);
+}
+
 export function normalizeProviderSnapshotToProductionInput(
   snapshot: ProviderOrderSnapshot,
 ): RawProviderOrderInput {
@@ -283,26 +686,65 @@ export function normalizeProviderSnapshotToProductionInput(
     externalId: snapshot.externalOrderId,
     reference: snapshot.reference,
     customerName: snapshot.customerName,
+    waiterName: snapshot.waiterName,
     channel: snapshot.channel,
     createdAt: snapshot.providerUpdatedAt,
     items: snapshot.items.map((item, index) => {
-      if (!item.catalogExternalId) {
+      const providerRoutingKey = item.catalogExternalId ?? item.providerItemId ?? null;
+
+      if (!providerRoutingKey) {
         throw new UnsupportedAnotaPayloadError(
           `Anota AI order "${snapshot.externalOrderId}" item #${
             index + 1
-          } (${item.name}) is missing catalog externalID and cannot be mapped to menuItemId`,
+          } (${item.name}) is missing catalog externalID and provider item ID and cannot be mapped to menuItemId`,
         );
       }
 
       return {
         externalItemId: item.externalItemId,
-        menuItemId: item.catalogExternalId,
+        menuItemId: providerRoutingKey,
+        providerItemId: item.providerItemId ?? null,
+        providerExternalId: item.catalogExternalId ?? null,
         name: item.name,
         quantity: item.quantity,
         notes: item.notes,
       };
     }),
   };
+}
+
+function readAssignedWaiterName(info: Record<string, unknown>) {
+  const namedObjects = [
+    info.waiter,
+    info.attendant,
+    info.server,
+    info.employee,
+    info.seller,
+    info.salesperson,
+    info.cashier,
+    info.user,
+  ];
+
+  for (const candidate of namedObjects) {
+    if (isPlainObject(candidate)) {
+      const name = readOptionalString(candidate.name);
+
+      if (name) {
+        return name;
+      }
+    }
+  }
+
+  return (
+    readOptionalString(info.waiterName) ??
+    readOptionalString(info.attendantName) ??
+    readOptionalString(info.serverName) ??
+    readOptionalString(info.employeeName) ??
+    readOptionalString(info.sellerName) ??
+    readOptionalString(info.salespersonName) ??
+    readOptionalString(info.cashierName) ??
+    readOptionalString(info.userName)
+  );
 }
 
 function normalizeAnotaOrderList(
@@ -389,6 +831,9 @@ function normalizeAnotaOrderItem(
       nextItem._id ?? nextItem.id,
       `Anota AI order "${externalOrderId}" item #${index + 1} identifier`,
     ),
+    providerItemId: readOptionalCatalogItemId(nextItem, {
+      allowOwnIdFallback: false,
+    }),
     catalogExternalId:
       readOptionalString(nextItem.externalId) ??
       readOptionalString(nextItem.external_id) ??
@@ -457,6 +902,47 @@ function normalizeAnotaOrderModifiers(
   });
 }
 
+function readOptionalCatalogItemId(
+  item: Record<string, unknown>,
+  options: {
+    allowOwnIdFallback: boolean;
+  } = {
+    allowOwnIdFallback: true,
+  },
+) {
+  const nestedItem = isPlainObject(item.item) ? item.item : undefined;
+  const nestedProduct = isPlainObject(item.product) ? item.product : undefined;
+  const nestedCatalogItem = isPlainObject(item.catalogItem)
+    ? item.catalogItem
+    : undefined;
+
+  const explicitCatalogItemId =
+    readOptionalString(item.catalogItemId) ??
+    readOptionalString(item.catalog_item_id) ??
+    readOptionalString(item.productId) ??
+    readOptionalString(item.product_id) ??
+    readOptionalString(item.internalId) ??
+    readOptionalString(item.internal_id) ??
+    readOptionalString(item.itemId) ??
+    readOptionalString(item.item_id) ??
+    readOptionalString(nestedCatalogItem?._id) ??
+    readOptionalString(nestedCatalogItem?.id) ??
+    readOptionalString(nestedProduct?._id) ??
+    readOptionalString(nestedProduct?.id) ??
+    readOptionalString(nestedItem?._id) ??
+    readOptionalString(nestedItem?.id);
+
+  if (explicitCatalogItemId) {
+    return explicitCatalogItemId;
+  }
+
+  if (!options.allowOwnIdFallback) {
+    return null;
+  }
+
+  return readOptionalString(item._id) ?? readOptionalString(item.id) ?? null;
+}
+
 async function parseAnotaResponseBody(
   response: Response,
   action: string,
@@ -496,11 +982,38 @@ function extractProviderMessage(payload: unknown) {
 }
 
 function buildAnotaListUrl(baseUrl: string, currentPage: number) {
-  const url = new URL(`${baseUrl}/ping/list`);
+  return buildAnotaPagedUrl(baseUrl, "ping/list", currentPage);
+}
+
+function buildAnotaPagedUrl(
+  baseUrl: string,
+  pathname: string,
+  currentPage: number,
+) {
+  const url = buildAnotaUrl(baseUrl, pathname);
 
   url.searchParams.set("currentpage", String(currentPage));
 
   return url;
+}
+
+function buildAnotaCatalogListUrl(
+  baseUrl: string,
+  pathname: string,
+  currentPage: number,
+) {
+  if (pathname.includes("/export/")) {
+    return buildAnotaUrl(baseUrl, pathname);
+  }
+
+  return buildAnotaPagedUrl(baseUrl, pathname, currentPage);
+}
+
+function buildAnotaItemExternalIdUrl(baseUrl: string, providerItemId: string) {
+  return buildAnotaUrl(
+    baseUrl,
+    `v2/item/external-id/${encodeURIComponent(providerItemId)}`,
+  );
 }
 
 function buildAnotaUrl(baseUrl: string, pathname: string) {
@@ -521,12 +1034,29 @@ function normalizeBaseUrl(baseUrl?: string) {
   return resolvedBaseUrl.replace(/\/+$/, "");
 }
 
+function normalizeCatalogBaseUrl(baseUrl?: string) {
+  const resolvedBaseUrl =
+    readOptionalString(baseUrl) ?? DEFAULT_ANOTA_AI_CATALOG_BASE_URL;
+
+  return resolvedBaseUrl.replace(/\/+$/, "");
+}
+
 function normalizeRequestedLimit(limit: number | undefined) {
   if (typeof limit !== "number") {
     return Number.POSITIVE_INFINITY;
   }
 
   return normalizeCount(limit, "Anota AI listConfirmedOrders limit");
+}
+
+function resolveAnotaCatalogListPaths(catalogListPath?: string) {
+  const normalizedPath = readOptionalString(catalogListPath);
+
+  if (normalizedPath) {
+    return [normalizedPath];
+  }
+
+  return [...DEFAULT_ANOTA_AI_CATALOG_LIST_PATHS];
 }
 
 function normalizeCount(value: unknown, fieldName: string) {
@@ -543,6 +1073,14 @@ function normalizeCount(value: unknown, fieldName: string) {
   }
 
   throw new UnsupportedAnotaPayloadError(`${fieldName} must be a positive integer`);
+}
+
+function normalizeOptionalCount(value: unknown) {
+  if (value == null) {
+    return undefined;
+  }
+
+  return normalizeCount(value, "Anota AI count");
 }
 
 function normalizeCheckCode(value: unknown): AnotaOrderCheckCode {
@@ -574,6 +1112,16 @@ function normalizeDateTime(value: string, fieldName: string) {
   }
 
   return value;
+}
+
+function normalizeOptionalDateTime(value: unknown) {
+  const nextValue = readOptionalString(value);
+
+  if (!nextValue) {
+    return undefined;
+  }
+
+  return normalizeDateTime(nextValue, "Anota AI dateTime");
 }
 
 function normalizeQuantity(value: unknown, fieldName: string) {

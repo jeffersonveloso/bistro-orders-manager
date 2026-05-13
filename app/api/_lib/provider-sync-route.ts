@@ -58,19 +58,22 @@ export function jsonNoStore(body: unknown, init: ResponseInit = {}) {
 export function authenticateSharedSecret(
   headers: Headers,
   {
+    additionalHeaderNames = [],
     env = process.env,
     secretEnvKey,
     secretHeaderName,
   }: {
+    additionalHeaderNames?: string[];
     env?: NodeJS.ProcessEnv;
     secretEnvKey: keyof typeof providerSyncSecretEnv;
     secretHeaderName: keyof typeof providerSyncSecretHeaders;
   },
 ) {
   const expectedSecret = normalizeSecret(env[providerSyncSecretEnv[secretEnvKey]]);
-  const receivedSecret = normalizeSecret(
-    headers.get(providerSyncSecretHeaders[secretHeaderName]),
-  );
+  const receivedSecret = readFirstMatchingSecret(headers, [
+    providerSyncSecretHeaders[secretHeaderName],
+    ...additionalHeaderNames,
+  ]);
 
   if (!expectedSecret || !receivedSecret) {
     return unauthorizedResponse();
@@ -160,7 +163,26 @@ function normalizeSecret(value: string | null | undefined) {
     return undefined;
   }
 
-  const normalizedValue = value.trim();
+  const trimmedValue = value.trim();
+
+  if (trimmedValue.length === 0) {
+    return undefined;
+  }
+
+  const bearerMatch = /^Bearer\s+(.+)$/i.exec(trimmedValue);
+  const normalizedValue = bearerMatch?.[1]?.trim() ?? trimmedValue;
 
   return normalizedValue.length > 0 ? normalizedValue : undefined;
+}
+
+function readFirstMatchingSecret(headers: Headers, headerNames: string[]) {
+  for (const headerName of headerNames) {
+    const normalizedValue = normalizeSecret(headers.get(headerName));
+
+    if (normalizedValue) {
+      return normalizedValue;
+    }
+  }
+
+  return undefined;
 }

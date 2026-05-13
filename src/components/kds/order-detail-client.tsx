@@ -6,12 +6,17 @@ import {
   CheckCheck,
   ChefHat,
   Eye,
+  EyeOff,
   History,
+  ReceiptText,
   TriangleAlert,
+  UserRound,
 } from "lucide-react";
 import Link from "next/link";
+import { useState } from "react";
 
 import type { OrderDetailData } from "@/src/application/production-service";
+import { AreaSwitchButton } from "@/src/components/kds/area-switch-button";
 import {
   getDashboardInvalidationKeys,
   getOrderDetailQueryOptions,
@@ -27,13 +32,11 @@ import { Card } from "@/src/components/ui/card";
 import { Separator } from "@/src/components/ui/separator";
 import { getCanonicalAreaPath, type KitchenAreaId } from "@/src/domain/area-access";
 import { fetchJson } from "@/src/lib/fetch-json";
-import { cn } from "@/src/lib/utils";
+import { localizeKitchenLabel } from "@/src/lib/kitchen-labels";
+import { cn, formatOperationalTime } from "@/src/lib/utils";
 
 function formatSyncTime(value: string) {
-  return new Date(value).toLocaleTimeString("pt-BR", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return formatOperationalTime(value);
 }
 
 function getItemStatusLabel(status: "new" | "in_preparation" | "ready") {
@@ -75,6 +78,26 @@ function ExternalItemStatusPill({
   );
 }
 
+function DetailMetaPill({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: typeof UserRound;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="flex items-center gap-2 rounded-full border border-[var(--panel-border)] bg-white/78 px-3 py-2 text-sm text-[var(--ink-soft)]">
+      <Icon className="size-4 text-[var(--accent-hot)]" />
+      <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--ink-muted)]">
+        {label}
+      </span>
+      <span className="font-semibold text-[var(--ink-strong)]">{value}</span>
+    </div>
+  );
+}
+
 export function OrderDetailClient({
   orderId,
   kitchenId,
@@ -85,6 +108,7 @@ export function OrderDetailClient({
   initialData?: OrderDetailData;
 }) {
   const queryClient = useQueryClient();
+  const [showOtherKitchen, setShowOtherKitchen] = useState(true);
 
   const orderQuery = useQuery(
     getOrderDetailQueryOptions({
@@ -188,32 +212,46 @@ export function OrderDetailClient({
       focusActiveItems.some((item) => item.status !== "new") ||
       data.focusItems.some((item) => item.externalStatus?.kind === "canceled"),
   };
+  const showOverallOrderStatus =
+    data.orderStatusKey !== data.focusTicketStatus || Boolean(data.otherKitchen);
 
   return (
     <main className="min-h-screen px-4 py-4 md:px-6 md:py-6">
       <div className="mx-auto flex max-w-[1680px] flex-col gap-5">
         <header className="grid gap-4 rounded-[2.2rem] border border-[var(--panel-border)] bg-[linear-gradient(135deg,rgba(255,255,255,0.96),rgba(250,244,233,0.92))] p-6 shadow-[0_24px_70px_rgba(34,30,25,0.1)] lg:grid-cols-[1.1fr_0.9fr]">
           <div className="space-y-4">
-            <Button asChild size="sm" variant="ghost">
-              <Link href={getCanonicalAreaPath(kitchenId)}>
-                <ArrowLeft className="size-4" />
-                Voltar ao painel
-              </Link>
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button asChild size="sm" variant="ghost">
+                <Link href={getCanonicalAreaPath(kitchenId)}>
+                  <ArrowLeft className="size-4" />
+                  Voltar ao painel
+                </Link>
+              </Button>
+              <AreaSwitchButton />
+            </div>
             <div className="space-y-2">
               <p className="font-mono text-xs uppercase tracking-[0.24em] text-[var(--ink-muted)]">
-                {data.reference}
+                Pedido sincronizado
               </p>
               <h1 className="font-display text-5xl uppercase tracking-[0.08em] text-[var(--ink-strong)] md:text-7xl">
                 {data.customerName ?? "Sem nome"}
               </h1>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <DetailMetaPill icon={UserRound} label="Garçom" value={data.waiterName ?? "Não informado"} />
+              <DetailMetaPill icon={ReceiptText} label="Comanda" value={data.reference} />
             </div>
             <div className="flex flex-wrap gap-3">
               <StatusBadge
                 label={data.focusKitchenStatus}
                 status={data.focusTicketStatus}
               />
-              <StatusBadge label={data.orderStatus} status={data.orderStatusKey} />
+              {showOverallOrderStatus ? (
+                <StatusBadge
+                  label={data.orderStatus}
+                  status={data.orderStatusKey}
+                />
+              ) : null}
             </div>
           </div>
 
@@ -226,7 +264,7 @@ export function OrderDetailClient({
                 className="font-display text-4xl uppercase tracking-[0.08em]"
                 data-testid="focus-kitchen-name"
               >
-                {data.focusKitchenName}
+                {localizeKitchenLabel(data.focusKitchenName)}
               </h2>
             </div>
             <div className="flex flex-wrap items-start justify-end gap-2">
@@ -312,7 +350,12 @@ export function OrderDetailClient({
           </Card>
         ) : null}
 
-        <section className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
+        <section
+          className={cn(
+            "grid gap-5",
+            data.otherKitchen && showOtherKitchen && "xl:grid-cols-[1.15fr_0.85fr]",
+          )}
+        >
           <Card className="space-y-5 rounded-[2rem] border-[var(--panel-border-strong)] bg-[linear-gradient(180deg,rgba(255,255,255,0.94),rgba(249,244,235,0.98))] p-5">
             <div className="flex items-end justify-between gap-3">
               <div>
@@ -320,13 +363,32 @@ export function OrderDetailClient({
                   Seus itens em destaque
                 </p>
                 <h2 className="font-display text-4xl uppercase tracking-[0.08em] text-[var(--ink-strong)]">
-                  {data.focusKitchenName}
+                  {localizeKitchenLabel(data.focusKitchenName)}
                 </h2>
               </div>
-              <StatusBadge
-                label={data.focusKitchenStatus}
-                status={data.focusTicketStatus}
-              />
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <StatusBadge
+                  label={data.focusKitchenStatus}
+                  status={data.focusTicketStatus}
+                />
+                {data.otherKitchen ? (
+                  <Button
+                    data-testid="order-detail-toggle-other-kitchen"
+                    onClick={() => setShowOtherKitchen((current) => !current)}
+                    size="sm"
+                    variant={showOtherKitchen ? "default" : "secondary"}
+                  >
+                    {showOtherKitchen ? (
+                      <EyeOff className="size-4" />
+                    ) : (
+                      <Eye className="size-4" />
+                    )}
+                    {showOtherKitchen
+                      ? "Ocultar outra cozinha"
+                      : "Mostrar outra cozinha"}
+                  </Button>
+                ) : null}
+              </div>
             </div>
 
             <div className="space-y-3">
@@ -434,10 +496,11 @@ export function OrderDetailClient({
             </div>
           </Card>
 
-          <Card
-            className="space-y-5 rounded-[2rem] border-[var(--panel-border-strong)] bg-[linear-gradient(180deg,rgba(21,25,29,0.98),rgba(29,33,36,0.98))] p-5 text-white"
-            data-testid="other-kitchen-panel"
-          >
+          {data.otherKitchen && showOtherKitchen ? (
+            <Card
+              className="space-y-5 rounded-[2rem] border-[var(--panel-border-strong)] bg-[linear-gradient(180deg,rgba(21,25,29,0.98),rgba(29,33,36,0.98))] p-5 text-white"
+              data-testid="other-kitchen-panel"
+            >
             <div className="flex items-end justify-between gap-3">
               <div>
                 <p className="font-mono text-xs uppercase tracking-[0.24em] text-white/55">
@@ -447,7 +510,9 @@ export function OrderDetailClient({
                   className="font-display text-4xl uppercase tracking-[0.08em]"
                   data-testid="other-kitchen-name"
                 >
-                  {data.otherKitchen?.name ?? "Sem outra cozinha"}
+                  {data.otherKitchen
+                    ? localizeKitchenLabel(data.otherKitchen.name)
+                    : "Sem outra cozinha"}
                 </h2>
               </div>
               {data.otherKitchen ? (
@@ -547,7 +612,8 @@ export function OrderDetailClient({
                 estiverem alinhadas em status final.
               </p>
             </div>
-          </Card>
+            </Card>
+          ) : null}
         </section>
 
         {data.syncTrail.length > 0 ? (

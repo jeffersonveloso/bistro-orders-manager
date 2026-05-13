@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  createAnotaAiCatalogAdminProvider,
   createAnotaAiProvider,
   mapAnotaOrderCheck,
   normalizeAnotaOrderSnapshot,
@@ -28,6 +29,9 @@ function createOrderDetailResponse(overrides: Record<string, unknown> = {}) {
       customer: {
         name: "Teste",
       },
+      waiter: {
+        name: "Lia",
+      },
       from: "menu-share-adm",
       salesChannel: "anotaai",
       shortReference: 1553,
@@ -36,6 +40,7 @@ function createOrderDetailResponse(overrides: Record<string, unknown> = {}) {
         {
           _id: "66b6259876994faecbf911c2",
           id: 0,
+          internalId: "catalog-item-refrigerante-1l",
           name: "Refrigerante 1L",
           quantity: 1,
           externalId: "iced-coffee",
@@ -118,6 +123,7 @@ describe("anota ai provider", () => {
         externalOrderId: "66b6258e890ffb00126c4233",
         reference: "1553",
         customerName: "Teste",
+        waiterName: "Lia",
         channel: "anotaai",
         providerStatus: "in_production",
         lifecycle: "confirmed_ready",
@@ -128,6 +134,7 @@ describe("anota ai provider", () => {
     expect(snapshot?.items).toEqual([
       {
         externalItemId: "66b6259876994faecbf911c2",
+        providerItemId: "catalog-item-refrigerante-1l",
         catalogExternalId: "iced-coffee",
         name: "Refrigerante 1L",
         quantity: 1,
@@ -140,6 +147,37 @@ describe("anota ai provider", () => {
         ],
       },
     ]);
+  });
+
+  it("prefers explicit provider catalog item identifiers before falling back to the item payload id", () => {
+    const snapshot = normalizeAnotaOrderSnapshot(
+      createOrderDetailResponse({
+        items: [
+          {
+            _id: "order-line-item-id",
+            id: 77,
+            productId: "provider-product-id",
+            name: "Croissant",
+            quantity: 1,
+            externalId: "croissant",
+            subItems: [],
+          },
+          {
+            _id: "order-line-with-nested-item",
+            name: "Brownie",
+            quantity: 1,
+            externalId: "brownie",
+            item: {
+              _id: "provider-nested-item-id",
+            },
+            subItems: [],
+          },
+        ],
+      }),
+    );
+
+    expect(snapshot.items[0]?.providerItemId).toBe("provider-product-id");
+    expect(snapshot.items[1]?.providerItemId).toBe("provider-nested-item-id");
   });
 
   it("normalizes confirmed order listings into canonical snapshots consumable downstream", async () => {
@@ -183,6 +221,7 @@ describe("anota ai provider", () => {
               {
                 _id: "item-confirmed",
                 id: 1,
+                internalId: "catalog-item-croissant",
                 name: "Croissant",
                 quantity: 2,
                 externalId: "croissant",
@@ -216,18 +255,185 @@ describe("anota ai provider", () => {
       externalId: "order-confirmed",
       reference: "2001",
       customerName: "Teste",
+      waiterName: "Lia",
       channel: "anotaai",
       createdAt: "2024-08-09T14:20:08.107Z",
       items: [
         {
           externalItemId: "item-confirmed",
           menuItemId: "croissant",
+          providerItemId: "catalog-item-croissant",
+          providerExternalId: "croissant",
           name: "Croissant",
           quantity: 2,
           notes: undefined,
         },
       ],
     });
+  });
+
+  it("lists provider catalog items through the catalog admin capability", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/v2/nm-category/rest/simple-item/export/v2")) {
+        return createJsonResponse({
+          success: true,
+          data: [
+            {
+              title: "Doces",
+              itens: [
+              {
+                id: "catalog-item-1",
+                title: "Club Sandwich",
+                external_id: "club-sandwich",
+                updatedAt: "2026-05-12T12:00:00.000Z",
+              },
+              {
+                productId: "catalog-item-2",
+                title: "Bolo secreto",
+                updatedAt: "2026-05-12T12:01:00.000Z",
+              },
+              ],
+            },
+          ],
+        });
+      }
+
+      throw new Error(`unexpected url ${url}`);
+    });
+    const provider = createAnotaAiCatalogAdminProvider({
+      fetch: fetchMock as typeof fetch,
+      token: "token-123",
+    });
+
+    const items = await provider.listCatalogItems({
+      limit: 20,
+      updatedSince: "2026-05-01T00:00:00.000Z",
+    });
+
+    expect(items).toEqual([
+      {
+        provider: "anota_ai",
+        providerItemId: "catalog-item-1",
+        providerExternalId: "club-sandwich",
+        name: "Club Sandwich",
+        updatedAt: "2026-05-12T12:00:00.000Z",
+        rawPayload: {
+          id: "catalog-item-1",
+          title: "Club Sandwich",
+          external_id: "club-sandwich",
+          updatedAt: "2026-05-12T12:00:00.000Z",
+        },
+      },
+      {
+        provider: "anota_ai",
+        providerItemId: "catalog-item-2",
+        providerExternalId: null,
+        name: "Bolo secreto",
+        updatedAt: "2026-05-12T12:01:00.000Z",
+        rawPayload: {
+          productId: "catalog-item-2",
+          title: "Bolo secreto",
+          updatedAt: "2026-05-12T12:01:00.000Z",
+        },
+      },
+    ]);
+  });
+
+  it("publishes the external id through the Anota menu API", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.endsWith("/v2/item/external-id/catalog-item-3")) {
+        expect(init?.method).toBe("PUT");
+        expect(init?.body).toBe(
+          JSON.stringify({
+            document: {
+              external_id: "cappuccino",
+            },
+          }),
+        );
+
+        return createJsonResponse({
+          success: true,
+          message: "External ID atualizado com sucesso.",
+        });
+      }
+
+      throw new Error(`unexpected url ${url}`);
+    });
+    const provider = createAnotaAiCatalogAdminProvider({
+      fetch: fetchMock as typeof fetch,
+      token: "token-123",
+    });
+
+    await expect(
+      provider.publishExternalId({
+        providerItemId: "catalog-item-3",
+        externalId: "cappuccino",
+      }),
+    ).resolves.toEqual({
+      status: "published",
+      providerMessage: "External ID atualizado com sucesso.",
+    });
+  });
+
+  it("flattens nested category collections returned by the catalog endpoint", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/v2/nm-category/rest/simple-item/export/v2")) {
+        return createJsonResponse({
+          success: true,
+          data: [
+            {
+              title: "Bebidas",
+              itens: [
+              {
+                internalId: "item-cappuccino",
+                name: "Cappuccino italiano 190ml",
+                externalId: "cappuccino-italiano-190ml",
+                updatedAt: "2026-05-12T12:03:00.000Z",
+              },
+              ],
+            },
+            {
+              title: "Lanches",
+              products: [
+              {
+                internalId: "item-misto",
+                title: "Misto quente",
+                external_id: "misto-quente",
+                updatedAt: "2026-05-12T12:04:00.000Z",
+              },
+              ],
+            },
+          ],
+        });
+      }
+
+      throw new Error(`unexpected url ${url}`);
+    });
+    const provider = createAnotaAiCatalogAdminProvider({
+      fetch: fetchMock as typeof fetch,
+      token: "token-123",
+    });
+
+    const items = await provider.listCatalogItems({ limit: 50 });
+
+    expect(items).toEqual([
+      expect.objectContaining({
+        providerItemId: "item-cappuccino",
+        providerExternalId: "cappuccino-italiano-190ml",
+        name: "Cappuccino italiano 190ml",
+      }),
+      expect.objectContaining({
+        providerItemId: "item-misto",
+        providerExternalId: "misto-quente",
+        name: "Misto quente",
+      }),
+    ]);
   });
 
   it("uses catalog externalID as menuItemId and rejects missing identifiers", () => {
@@ -248,6 +454,64 @@ describe("anota ai provider", () => {
     expect(() => normalizeProviderSnapshotToProductionInput(snapshot)).toThrowError(
       /missing catalog externalid/i,
     );
+  });
+
+  it("falls back to provider item id when the provider order line has no externalID", () => {
+    const snapshot = normalizeAnotaOrderSnapshot(
+      createOrderDetailResponse({
+        items: [
+          {
+            _id: "item-with-provider-id-only",
+            internalId: "provider-item-cappuccino",
+            name: "Cappuccino italiano 190ml",
+            quantity: 1,
+            externalId: "",
+            subItems: [],
+          },
+        ],
+      }),
+    );
+
+    expect(snapshot.items[0]?.catalogExternalId).toBeNull();
+    expect(snapshot.items[0]?.providerItemId).toBe("provider-item-cappuccino");
+    expect(normalizeProviderSnapshotToProductionInput(snapshot)).toEqual({
+      externalId: "66b6258e890ffb00126c4233",
+      reference: "1553",
+      customerName: "Teste",
+      waiterName: "Lia",
+      channel: "anotaai",
+      createdAt: "2024-08-09T14:20:08.107Z",
+      items: [
+        {
+          externalItemId: "item-with-provider-id-only",
+          menuItemId: "provider-item-cappuccino",
+          providerItemId: "provider-item-cappuccino",
+          providerExternalId: null,
+          name: "Cappuccino italiano 190ml",
+          quantity: 1,
+          notes: undefined,
+        },
+      ],
+    });
+  });
+
+  it("accepts canceled canonical snapshots without an items array", () => {
+    const snapshot = normalizeAnotaOrderSnapshot(
+      createOrderDetailResponse({
+        check: 4,
+        updatedAt: "2026-05-12T18:00:00.000Z",
+        items: undefined,
+      }),
+    );
+
+    expect(snapshot).toEqual(
+      expect.objectContaining({
+        lifecycle: "canceled",
+        providerStatus: "canceled",
+        providerUpdatedAt: "2026-05-12T18:00:00.000Z",
+      }),
+    );
+    expect(snapshot.items).toEqual([]);
   });
 
   it("surfaces descriptive failures for unsupported or incomplete provider payloads", async () => {

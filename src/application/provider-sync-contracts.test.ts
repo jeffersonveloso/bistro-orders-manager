@@ -57,7 +57,9 @@ describe("provider sync port contracts", () => {
           createdAt: nextSnapshot.providerUpdatedAt,
           items: nextSnapshot.items.map((item) => ({
             externalItemId: item.externalItemId,
-            menuItemId: item.catalogExternalId ?? "",
+            menuItemId: item.catalogExternalId ?? item.providerItemId ?? "",
+            providerItemId: item.providerItemId ?? null,
+            providerExternalId: item.catalogExternalId ?? null,
             name: item.name,
             quantity: item.quantity,
             notes: item.notes,

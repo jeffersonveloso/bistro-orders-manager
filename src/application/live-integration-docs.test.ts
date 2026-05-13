@@ -52,6 +52,8 @@ describe("live integration documentation", () => {
       orderSyncProviderEnv.mode,
       orderSyncProviderEnv.anotaAiToken,
       orderSyncProviderEnv.anotaAiBaseUrl,
+      orderSyncProviderEnv.anotaAiCatalogBaseUrl,
+      orderSyncProviderEnv.anotaAiCatalogListPath,
       providerSyncSecretEnv.webhook,
       providerSyncSecretEnv.reconcile,
       "BISTRO_DATABASE_PATH",
@@ -117,7 +119,7 @@ describe("live integration documentation", () => {
     expect(docs.prd).toContain("Phase 1 imports only confirmed orders");
     expect(docs.techspec).toContain("webhook-first + scheduled reconciliation");
     expect(docs.techspec).toContain(
-      "The adapter must derive internal `menuItemId` from Anota catalog `externalID`.",
+      "The adapter must derive the provider routing key from Anota catalog `externalID`.",
     );
 
     for (const requiredPhrase of [
@@ -129,6 +131,18 @@ describe("live integration documentation", () => {
     ]) {
       expect(combinedDocs.toLowerCase()).toContain(requiredPhrase.toLowerCase());
     }
+  });
+
+  it("distinguishes seeded Playwright regression from live adapter QA", () => {
+    const docs = readDocSet();
+    const combinedDocs = [docs.readme, docs.livePlaybook, docs.verificationReport]
+      .join("\n")
+      .toLowerCase();
+
+    expect(combinedDocs).toContain("npm run test:e2e");
+    expect(combinedDocs).toContain("playwright");
+    expect(combinedDocs).toContain("forces `bistro_order_sync_provider_mode=mock`".toLowerCase());
+    expect(combinedDocs).toContain("real `anota_ai` adapter");
   });
 
   it("references only routes and ownership surfaces that exist in the current implementation", () => {

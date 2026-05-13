@@ -12,7 +12,9 @@ import type {
   FinishSyncRunInput,
   InboundProviderEvent,
   ListConfirmedOrdersInput,
+  ListCatalogItemsInput,
   OpenSyncExceptionInput,
+  ProviderCatalogItem,
   ProviderEventRecord,
   ProviderOrderReference,
   ProviderOrderSnapshot,
@@ -25,6 +27,7 @@ import type {
   SyncRunResult,
   WebhookInput,
   WebhookProcessResult,
+  ProviderName,
 } from "@/src/domain/provider-sync";
 import type { SplitOrderResult } from "@/src/domain/split-order-service";
 
@@ -49,6 +52,37 @@ export interface OrderSyncProviderPort {
   toProductionInput(
     snapshot: ProviderOrderSnapshot,
   ): RawProviderOrderInput | null;
+}
+
+export interface CatalogExternalIdSupport {
+  provider: ProviderName;
+  providerLabel: string;
+  mode: "manual_assist" | "api_write";
+  actionLabel: string;
+  summary: string;
+  helpUrl?: string | null;
+  instructions: string[];
+}
+
+export interface PublishCatalogExternalIdInput {
+  providerItemId: string;
+  externalId: string;
+}
+
+export interface PublishCatalogExternalIdResult {
+  status: "published" | "skipped";
+  providerMessage?: string | null;
+}
+
+export interface CatalogAdminProviderPort {
+  providerName(): ProviderName;
+  getCatalogExternalIdSupport(): CatalogExternalIdSupport;
+  listCatalogItems(
+    input: ListCatalogItemsInput,
+  ): Promise<ProviderCatalogItem[]>;
+  publishExternalId(
+    input: PublishCatalogExternalIdInput,
+  ): Promise<PublishCatalogExternalIdResult>;
 }
 
 export interface ProductionRepository {

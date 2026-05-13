@@ -7,6 +7,7 @@ import type { AreaSession, KitchenAreaId } from "@/src/domain/area-access";
 import {
   AreaAccessConfigurationError,
   type AreaAccessRuntimeConfig,
+  shouldUseSecureAreaCookies,
   maybeCreateRenewedAreaSessionCookie,
   loadAreaAccessRuntimeConfig,
   verifyAreaSessionFromCookieHeader,
@@ -165,7 +166,13 @@ async function withAreaAuthorization<TAuthorization>(
 
   const renewedCookie = maybeCreateRenewedAreaSessionCookie(
     sessionResult.session,
-    runtime.value.config,
+    {
+      ...runtime.value.config,
+      secureCookies: shouldUseSecureAreaCookies(
+        request,
+        runtime.value.config.secureCookies,
+      ),
+    },
     runtime.value.now,
   );
 

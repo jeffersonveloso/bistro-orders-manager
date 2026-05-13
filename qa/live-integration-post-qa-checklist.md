@@ -1,17 +1,17 @@
 # Phase 1 Live Integration Post-QA Checklist
 
-Task 09 used this file as the documentation gate for the Anota AI rollout. Evidence below reflects the final rerun after the live-bootstrap fix that removed demo orders and demo sync exceptions from fresh `anota_ai` databases.
+Stage 5 QA closure uses this file as the documentation gate for the Anota AI rollout. Evidence below reflects the final rerun on `2026-05-13` after reconciling the docs and isolating Playwright from live-mode `.env.local` drift.
 
 ## Commands To Verify
 
 - [x] `npm run lint`
-  - Verified on 2026-05-11 during the final rerun. Exit code `0`.
+  - Verified on 2026-05-13 during the final rerun. Exit code `0`.
 - [x] `npm run test:run -- --coverage`
-  - Verified on 2026-05-11 during the final rerun. Exit code `0`. Coverage: Statements `92.98%`, Branches `82.15%`, Functions `95.23%`, Lines `92.93%`.
+  - Verified on 2026-05-13 during the final rerun. Exit code `0`. Coverage: Statements `86.5%`, Branches `73.7%`, Functions `89.02%`, Lines `86.46%`. Vitest passed `17` files and `124` tests.
 - [x] `npm run build`
-  - Verified on 2026-05-11 during the final rerun. Exit code `0`.
+  - Verified on 2026-05-13 during the final rerun. Exit code `0`.
 - [x] `npm run test:e2e`
-  - Verified on 2026-05-11 during the final rerun. Exit code `0`. Playwright passed `5` tests.
+  - Verified on 2026-05-13 during the final rerun. Exit code `0`. Playwright passed `5` tests with a web-server override that forces `BISTRO_ORDER_SYNC_PROVIDER_MODE=mock` for seeded browser regression.
 - [x] Record the exact server boot command and any non-default env needed for the QA environment.
   - Verified with:
     `BISTRO_ORDER_SYNC_PROVIDER_MODE=anota_ai BISTRO_ANOTA_AI_TOKEN=qa-anota-token BISTRO_ANOTA_AI_BASE_URL=http://127.0.0.1:4010/partnerauth BISTRO_ANOTA_WEBHOOK_SECRET=qa-webhook-secret BISTRO_INTERNAL_SYNC_SECRET=qa-internal-secret BISTRO_DATABASE_PATH=data/bistro-production.qa.sqlite npm run start -- --hostname 127.0.0.1 --port 3100`
@@ -46,7 +46,7 @@ Task 09 used this file as the documentation gate for the Anota AI rollout. Evide
   - Local QA used `data/bistro-production.qa.sqlite`.
   - Assumption: the runtime can create sibling `-wal` and `-shm` files in the same directory.
 - [ ] Scheduler cadence used in QA and whether it supports the PRD arrival targets.
-  - Blocked: task 09 verified the reconciliation HTTP surface manually, but no real scheduler service or cadence owner was available.
+  - Blocked: repository QA verified the reconciliation HTTP surface manually, but no real scheduler service or cadence owner was available.
 
 ## Screenshots And Evidence To Capture
 
@@ -85,10 +85,10 @@ Task 09 used this file as the documentation gate for the Anota AI rollout. Evide
 ## Documentation Reconciliation
 
 - [x] Update `README.md` if env names, commands, route usage, or fallback instructions differ from runtime.
-  - Updated to distinguish `mock` startup seeding from clean `anota_ai` startup.
+  - Updated to distinguish `mock` startup seeding from clean `anota_ai` startup and to document that `npm run test:e2e` is intentionally mock-isolated.
 - [x] Update `docs/live-integration-phase-1.md` if scheduler behavior, webhook envelope guidance, or ownership language differs from observed QA behavior.
-  - Updated to document the clean-board bootstrap in `anota_ai` mode.
+  - Updated to document the clean-board bootstrap in `anota_ai` mode and to convert pre-QA wording into post-QA validated behavior plus pilot-only follow-up.
 - [x] Update `qa/verification-report.md` with the final evidence summary, commands, screenshots, warnings, and verdict for Phase 1.
-  - Refreshed in task 09.
+  - Refreshed on 2026-05-13.
 - [x] Record any operational caveat that remains provisional after QA instead of silently implying it is closed.
   - Live credential ownership, webhook-side configuration, and scheduler cadence remain explicitly blocked pending pilot environment access.

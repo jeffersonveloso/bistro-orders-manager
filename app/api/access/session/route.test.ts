@@ -32,6 +32,16 @@ function createJsonRequest(body: Record<string, unknown>) {
   });
 }
 
+function createHttpsJsonRequest(body: Record<string, unknown>) {
+  return new Request("https://bistro.example.com/api/access/session", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+}
+
 describe("POST /api/access/session", () => {
   it("returns 400 when the submitted area id is invalid", async () => {
     const response = await handlePostAccessSession(
@@ -122,6 +132,25 @@ describe("POST /api/access/session", () => {
       redirectTo: "/orders/order_anota-101?kitchen=kitchen-2",
     });
     expect(response.headers.get("Set-Cookie")).toContain("HttpOnly");
+    expect(response.headers.get("Set-Cookie")).not.toContain("Secure");
+  });
+
+  it("preserves secure cookies for HTTPS JSON logins", async () => {
+    const response = await handlePostAccessSession(
+      createHttpsJsonRequest({
+        areaId: "salon",
+        pin: "3333",
+      }),
+      {
+        config: {
+          ...createRuntimeConfig(),
+          secureCookies: true,
+        },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Set-Cookie")).toContain("Secure");
   });
 
   it("returns 503 when runtime access configuration is missing", async () => {

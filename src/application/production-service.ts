@@ -71,6 +71,7 @@ export interface SyncAlert {
   externalOrderId: string | null;
   reference: string;
   customerName: string | null;
+  waiterName: string | null;
   focusKitchenId: KitchenId | null;
   detectedAt: string;
   lastSeenAt: string;
@@ -115,6 +116,26 @@ const SYNC_DIFF_LABELS: Record<string, string> = {
   modifiers_changed: "modificadores alterados",
 };
 
+const PROVIDER_STATE_LABELS: Record<string, string> = {
+  canceled: "cancelado",
+  cancellation_requested: "cancelamento solicitado",
+  confirmed: "confirmado",
+  confirmed_ready: "confirmado para produção",
+  denied: "negado",
+  finalized: "finalizado",
+  in_production: "em produção",
+  pending_confirmation: "aguardando confirmação",
+  ready: "pronto",
+  under_review: "em análise",
+};
+const operationalTimeZone = "America/Sao_Paulo";
+const operationalDayFormatter = new Intl.DateTimeFormat("en-CA", {
+  day: "2-digit",
+  month: "2-digit",
+  timeZone: operationalTimeZone,
+  year: "numeric",
+});
+
 export interface BoardTicketCard {
   orderId: string;
   ticketId: string;
@@ -122,6 +143,7 @@ export interface BoardTicketCard {
   kitchenName: string;
   reference: string;
   customerName: string | null;
+  waiterName: string | null;
   ticketStatus: keyof typeof TICKET_STATUS_LABELS;
   ticketStatusLabel: string;
   orderStatus: keyof typeof ORDER_STATUS_LABELS;
@@ -152,6 +174,7 @@ export interface SalonSummaryOrder {
   orderId: string;
   reference: string;
   customerName: string | null;
+  waiterName: string | null;
   orderStatus: string;
   hasOpenSyncException: boolean;
   syncExceptionLabel: string | null;
@@ -188,6 +211,7 @@ export interface OrderDetailData {
   orderId: string;
   reference: string;
   customerName: string | null;
+  waiterName: string | null;
   focusKitchenId: KitchenId;
   focusKitchenName: string;
   focusTicketStatus: TicketStatus;
@@ -217,6 +241,21 @@ function formatAgeLabel(createdAt: string) {
   }
 
   return `${diffInMinutes} min`;
+}
+
+function getOperationalDayKey(value: string | Date) {
+  const date = value instanceof Date ? value : new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  const parts = operationalDayFormatter.formatToParts(date);
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+
+  return year && month && day ? `${year}-${month}-${day}` : "";
 }
 
 function hasSyncReadSupport(
@@ -270,7 +309,28 @@ function asNumber(value: unknown) {
 }
 
 function normalizeSyncSummary(value: string) {
-  return value.replace(/^Pedido\s+Pedido\s+/i, "Pedido ");
+  return translateProviderStateCodes(
+    value.replace(/^Pedido\s+Pedido\s+/i, "Pedido "),
+  );
+}
+
+function humanizeProviderState(value: string) {
+  const normalized = value.trim().toLowerCase();
+
+  return (
+    PROVIDER_STATE_LABELS[normalized] ??
+    normalized.replace(/[_-]+/g, " ")
+  );
+}
+
+function translateProviderStateCodes(value: string) {
+  return [...Object.entries(PROVIDER_STATE_LABELS)]
+    .sort((left, right) => right[0].length - left[0].length)
+    .reduce(
+    (nextValue, [code, label]) =>
+      nextValue.replace(new RegExp(code, "gi"), label),
+    value,
+  );
 }
 
 function describeChangedDiffs(details: unknown) {
@@ -323,7 +383,7 @@ function describeSyncExceptionDetail(exception: SyncExceptionRecord) {
 
       if (providerStatus || lifecycle) {
         return `Estado atual no provedor: ${
-          providerStatus ?? lifecycle
+          humanizeProviderState(providerStatus ?? lifecycle ?? "")
         }.`;
       }
 
@@ -617,6 +677,7 @@ function isCanceledExternalStatus(
 }
 
 function deriveOperationalTicketStatus(
+  ticket: Pick<OrderAggregate["tickets"][number], "startedAt"> | undefined,
   items: OrderAggregate["items"],
   itemStatuses: Map<string, ExternalItemStatusPresentation>,
   exception?: SyncExceptionRecord,
@@ -630,10 +691,14 @@ function deriveOperationalTicketStatus(
   );
 
   if (activeItems.length === 0) {
-    return deriveTicketStatus(items);
+    return deriveTicketStatus(items, {
+      hasStarted: Boolean(ticket?.startedAt),
+    });
   }
 
-  return deriveTicketStatus(activeItems);
+  return deriveTicketStatus(activeItems, {
+    hasStarted: Boolean(ticket?.startedAt),
+  });
 }
 
 function projectProviderStatusToTicketStatus(
@@ -666,6 +731,7 @@ function buildOperationalTicketStatuses(
       ticket.kitchenId,
       projectProviderStatusToTicketStatus(
         deriveOperationalTicketStatus(
+          ticket,
           aggregate.items.filter((item) => item.kitchenId === ticket.kitchenId),
           itemStatuses,
           exception,
@@ -703,11 +769,37 @@ function toOrderItemPresentation(
     });
 }
 
+function compareQueuePriority(
+  left: Pick<OrderAggregate["order"], "createdAt" | "reference" | "id">,
+  right: Pick<OrderAggregate["order"], "createdAt" | "reference" | "id">,
+) {
+  const createdAtComparison = left.createdAt.localeCompare(right.createdAt);
+
+  if (createdAtComparison !== 0) {
+    return createdAtComparison;
+  }
+
+  const referenceComparison = left.reference.localeCompare(
+    right.reference,
+    undefined,
+    { numeric: true },
+  );
+
+  if (referenceComparison !== 0) {
+    return referenceComparison;
+  }
+
+  return left.id.localeCompare(right.id, undefined, { numeric: true });
+}
+
 function buildProductionReadContext(
   repository: ProductionRepository,
 ): ProductionReadContext {
   const kitchens = repository.listKitchens();
-  const aggregates = repository.listOrderAggregates();
+  const aggregates = repository
+    .listOrderAggregates()
+    .slice()
+    .sort((left, right) => compareQueuePriority(left.order, right.order));
   const syncRepository = hasSyncReadSupport(repository) ? repository : null;
   const orderIds = aggregates.map((aggregate) => aggregate.order.id);
   const unresolvedExceptions = syncRepository
@@ -742,8 +834,26 @@ function buildProductionReadContext(
 
 function buildSalonSummary(
   context: ProductionReadContext,
+  {
+    scope = "all",
+    sortDirection = "ascending",
+  }: {
+    scope?: "all" | "current_day";
+    sortDirection?: "ascending" | "descending";
+  } = {},
 ): SalonSummaryOrder[] {
-  return context.aggregates
+  const todayKey = scope === "current_day" ? getOperationalDayKey(new Date()) : null;
+  const aggregates = context.aggregates.filter((aggregate) => {
+    if (!todayKey) {
+      return true;
+    }
+
+    return getOperationalDayKey(aggregate.order.createdAt) === todayKey;
+  });
+  const orderedAggregates =
+    sortDirection === "descending" ? aggregates.slice().reverse() : aggregates;
+
+  return orderedAggregates
     .map((aggregate) => {
       const syncException = context.latestExceptionByOrderId.get(aggregate.order.id);
       const providerState = context.syncRepository
@@ -768,6 +878,7 @@ function buildSalonSummary(
           ticketStatusesByKitchenId.get(ticket.kitchenId) ??
           projectProviderStatusToTicketStatus(
             deriveOperationalTicketStatus(
+              ticket,
               aggregate.items.filter((item) => item.kitchenId === ticket.kitchenId),
               itemStatuses,
               syncException,
@@ -788,6 +899,7 @@ function buildSalonSummary(
             ticketStatusesByKitchenId.get(ticket.kitchenId) ??
             projectProviderStatusToTicketStatus(
               deriveOperationalTicketStatus(
+                ticket,
                 aggregate.items.filter((item) => item.kitchenId === ticket.kitchenId),
                 itemStatuses,
                 syncException,
@@ -801,6 +913,7 @@ function buildSalonSummary(
         orderId: aggregate.order.id,
         reference: aggregate.order.reference,
         customerName: aggregate.order.customerName,
+        waiterName: aggregate.order.waiterName,
         orderStatus: ORDER_STATUS_LABELS[orderStatus],
         hasOpenSyncException: Boolean(syncException),
         syncExceptionLabel: syncException
@@ -811,10 +924,7 @@ function buildSalonSummary(
           : null,
         ticketBreakdown,
       };
-    })
-    .sort((left, right) =>
-      left.reference.localeCompare(right.reference, undefined, { numeric: true }),
-    );
+    });
 }
 
 function buildDashboardMetrics(
@@ -855,6 +965,7 @@ function buildSyncAlerts(context: ProductionReadContext): SyncAlert[] {
           ? `Pedido externo ${exception.externalOrderId}`
           : "Pedido externo sem vínculo"),
       customerName: aggregate?.order.customerName ?? null,
+      waiterName: aggregate?.order.waiterName ?? null,
       focusKitchenId: aggregate?.tickets[0]?.kitchenId ?? null,
       detectedAt: exception.detectedAt,
       lastSeenAt: exception.lastSeenAt,
@@ -865,6 +976,16 @@ function buildSyncAlerts(context: ProductionReadContext): SyncAlert[] {
 export function getDashboardData(repository: ProductionRepository): DashboardData {
   const context = buildProductionReadContext(repository);
   const columnStatuses = ["new", "in_preparation", "ready", "canceled"] as const;
+  const currentOperationalDayKey = getOperationalDayKey(new Date());
+  const currentOperationalDayOrderIds = new Set(
+    context.aggregates
+      .filter(
+        (aggregate) =>
+          getOperationalDayKey(aggregate.order.createdAt) ===
+          currentOperationalDayKey,
+      )
+      .map((aggregate) => aggregate.order.id),
+  );
 
   const kitchenBoards = context.kitchens.map((kitchen) => {
     const cards = context.aggregates
@@ -915,6 +1036,7 @@ export function getDashboardData(repository: ProductionRepository): DashboardDat
               ticketStatusesByKitchenId.get(kitchen.id) ??
               projectProviderStatusToTicketStatus(
                 deriveOperationalTicketStatus(
+                  ticket,
                   ticketItems,
                   itemStatuses,
                   syncException,
@@ -925,12 +1047,13 @@ export function getDashboardData(repository: ProductionRepository): DashboardDat
               aggregate.tickets.map((candidate) => ({
                 ...candidate,
                 status:
-                  ticketStatusesByKitchenId.get(candidate.kitchenId) ??
-                  projectProviderStatusToTicketStatus(
-                    deriveOperationalTicketStatus(
-                      aggregate.items.filter(
-                        (item) => item.kitchenId === candidate.kitchenId,
-                      ),
+                    ticketStatusesByKitchenId.get(candidate.kitchenId) ??
+                    projectProviderStatusToTicketStatus(
+                      deriveOperationalTicketStatus(
+                        candidate,
+                        aggregate.items.filter(
+                          (item) => item.kitchenId === candidate.kitchenId,
+                        ),
                       itemStatuses,
                       syncException,
                     ),
@@ -946,6 +1069,7 @@ export function getDashboardData(repository: ProductionRepository): DashboardDat
               kitchenName: kitchen.name,
               reference: aggregate.order.reference,
               customerName: aggregate.order.customerName,
+              waiterName: aggregate.order.waiterName,
               ticketStatus,
               ticketStatusLabel: TICKET_STATUS_LABELS[ticketStatus],
               orderStatus,
@@ -957,6 +1081,7 @@ export function getDashboardData(repository: ProductionRepository): DashboardDat
                     ticketStatusesByKitchenId.get(otherTicket.kitchenId) ??
                       projectProviderStatusToTicketStatus(
                         deriveOperationalTicketStatus(
+                          otherTicket,
                           otherItems,
                           itemStatuses,
                           syncException,
@@ -976,22 +1101,26 @@ export function getDashboardData(repository: ProductionRepository): DashboardDat
             };
           })(),
         ];
-      })
-      .sort((left, right) =>
-        left.reference.localeCompare(right.reference, undefined, {
-          numeric: true,
-        }),
-      );
+      });
 
     return {
       id: kitchen.id,
       name: kitchen.name,
       description: kitchen.description,
-      columns: columnStatuses.map((status) => ({
-        status,
-        label: TICKET_STATUS_LABELS[status],
-        tickets: cards.filter((card) => card.ticketStatus === status),
-      })),
+      columns: columnStatuses.map((status) => {
+        const tickets = cards.filter(
+          (card) =>
+            card.ticketStatus === status &&
+            (status !== "ready" ||
+              currentOperationalDayOrderIds.has(card.orderId)),
+        );
+
+        return {
+          status,
+          label: TICKET_STATUS_LABELS[status],
+          tickets: status === "ready" ? tickets.slice().reverse() : tickets,
+        };
+      }),
     };
   });
 
@@ -1009,7 +1138,10 @@ export function getDashboardData(repository: ProductionRepository): DashboardDat
 
 export function getSalonData(repository: ProductionRepository): SalonData {
   const context = buildProductionReadContext(repository);
-  const summary = buildSalonSummary(context);
+  const summary = buildSalonSummary(context, {
+    scope: "current_day",
+    sortDirection: "descending",
+  });
 
   return {
     summary,
@@ -1077,6 +1209,7 @@ export function getOrderDetailData(
     ticketStatusesByKitchenId.get(focusKitchenId) ??
     projectProviderStatusToTicketStatus(
       deriveOperationalTicketStatus(
+        aggregate.tickets.find((ticket) => ticket.kitchenId === focusKitchenId),
         focusItems,
         itemStatuses,
         syncException,
@@ -1090,6 +1223,7 @@ export function getOrderDetailData(
         ticketStatusesByKitchenId.get(ticket.kitchenId) ??
         projectProviderStatusToTicketStatus(
           deriveOperationalTicketStatus(
+            ticket,
             aggregate.items.filter((item) => item.kitchenId === ticket.kitchenId),
             itemStatuses,
             syncException,
@@ -1103,6 +1237,7 @@ export function getOrderDetailData(
     orderId: aggregate.order.id,
     reference: aggregate.order.reference,
     customerName: aggregate.order.customerName,
+    waiterName: aggregate.order.waiterName,
     focusKitchenId,
     focusKitchenName: focusKitchen?.name ?? focusKitchenId,
     focusTicketStatus: focusStatus,
@@ -1120,6 +1255,7 @@ export function getOrderDetailData(
             ticketStatusesByKitchenId.get(otherKitchen.kitchenId) ??
             projectProviderStatusToTicketStatus(
               deriveOperationalTicketStatus(
+                otherKitchen,
                 otherItems,
                 itemStatuses,
                 syncException,
@@ -1131,6 +1267,7 @@ export function getOrderDetailData(
               ticketStatusesByKitchenId.get(otherKitchen.kitchenId) ??
                 projectProviderStatusToTicketStatus(
                   deriveOperationalTicketStatus(
+                    otherKitchen,
                     otherItems,
                     itemStatuses,
                     syncException,

@@ -60,6 +60,21 @@ function createPatchRequest(
   });
 }
 
+function createRawPatchRequest(
+  path: string,
+  rawBody: string,
+  cookieHeader?: string,
+) {
+  return new Request(`http://localhost${path}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...(cookieHeader ? { cookie: cookieHeader } : {}),
+    },
+    body: rawBody,
+  });
+}
+
 function readOrderItemRow(
   context: ReturnType<typeof createProductionTestContext>,
   itemId: string,
@@ -75,6 +90,27 @@ function readOrderItemRow(
     .get(itemId) as
     | {
         status: string;
+        updatedAt: string;
+      }
+    | undefined;
+}
+
+function readKitchenTicketRow(
+  context: ReturnType<typeof createProductionTestContext>,
+  orderId: string,
+  kitchenId: string,
+) {
+  return context.database
+    .prepare(
+      `
+        SELECT started_at as startedAt, updated_at as updatedAt
+        FROM kitchen_tickets
+        WHERE order_id = ? AND kitchen_id = ?
+      `,
+    )
+    .get(orderId, kitchenId) as
+    | {
+        startedAt: string | null;
         updatedAt: string;
       }
     | undefined;
@@ -123,6 +159,73 @@ describe("order mutation API handlers", () => {
     }
   });
 
+  it("returns 404 when the target order does not exist for an item mutation", async () => {
+    const context = createProductionTestContext({
+      importProviderOrders: true,
+    });
+
+    try {
+      const response = handlePatchOrderItem(context.repository, {
+        itemId: "order_missing__item-1",
+        orderId: "order_missing",
+        status: "in_preparation",
+      });
+
+      expect(response.status).toBe(404);
+      expect(await response.json()).toBe("Order not found");
+    } finally {
+      context.close();
+    }
+  });
+
+  it("returns 404 when the order exists but the requested item does not", async () => {
+    const context = createProductionTestContext({
+      importProviderOrders: true,
+    });
+
+    try {
+      const response = handlePatchOrderItem(context.repository, {
+        itemId: "order_anota-101__missing",
+        orderId: "order_anota-101",
+        status: "in_preparation",
+      });
+
+      expect(response.status).toBe(404);
+      expect(await response.json()).toBe("Order item not found");
+    } finally {
+      context.close();
+    }
+  });
+
+  it("returns 500 when item mutation hits an unexpected repository error", async () => {
+    const context = createProductionTestContext({
+      importProviderOrders: true,
+    });
+    const updateSpy = vi
+      .spyOn(context.repository, "updateItemStatus")
+      .mockImplementation(() => {
+        throw new Error("sqlite closed");
+      });
+
+    try {
+      const response = handlePatchOrderItem(context.repository, {
+        itemId: "order_anota-101__101-1",
+        orderId: "order_anota-101",
+        status: "in_preparation",
+      });
+
+      expect(response.status).toBe(500);
+      expect(await response.json()).toBe("Internal server error");
+      expect(updateSpy).toHaveBeenCalledWith(
+        "order_anota-101",
+        "order_anota-101__101-1",
+        "in_preparation",
+      );
+    } finally {
+      context.close();
+    }
+  });
+
   it("starts and completes a kitchen ticket through the handler flow", async () => {
     const context = createProductionTestContext({
       importProviderOrders: true,
@@ -136,13 +239,18 @@ describe("order mutation API handlers", () => {
       });
       expect(startResponse.status).toBe(200);
 
-      const startedItems =
+      const ticketAfterStart = readKitchenTicketRow(
+        context,
+        "order_anota-101",
+        "kitchen-1",
+      );
+      expect(ticketAfterStart?.startedAt).toEqual(expect.any(String));
+
+      const itemsAfterStart =
         context.repository
           .getOrderAggregate("order_anota-101")
           ?.items.filter((item) => item.kitchenId === "kitchen-1") ?? [];
-      expect(startedItems.every((item) => item.status === "in_preparation")).toBe(
-        true,
-      );
+      expect(itemsAfterStart.every((item) => item.status === "new")).toBe(true);
 
       const completeResponse = handlePatchKitchenTicket(context.repository, {
         action: "complete",
@@ -182,6 +290,85 @@ describe("order mutation API handlers", () => {
       });
       expect(invalidActionResponse.status).toBe(400);
       expect(await invalidActionResponse.json()).toBe("Invalid action");
+    } finally {
+      context.close();
+    }
+  });
+
+  it("returns 404 when the target order does not exist for a kitchen ticket mutation", async () => {
+    const context = createProductionTestContext({
+      importProviderOrders: true,
+    });
+    const config = createRuntimeConfig();
+    const startSpy = vi.spyOn(context.repository, "startKitchenTicket");
+
+    try {
+      const response = await handlePatchKitchenTicketRoute(
+        createPatchRequest(
+          "/api/orders/order_missing/tickets/kitchen-1",
+          {
+            action: "start",
+          },
+          createCookieHeader(config, "kitchen-1"),
+        ),
+        {
+          kitchenId: "kitchen-1",
+          orderId: "order_missing",
+        },
+        {
+          config,
+          now: new Date("2026-05-13T12:00:00.000Z"),
+          repository: context.repository,
+        },
+      );
+
+      expect(response.status).toBe(404);
+      expect(await response.json()).toBe("Order not found");
+      expect(startSpy).not.toHaveBeenCalled();
+    } finally {
+      context.close();
+    }
+  });
+
+  it("returns 404 when the order exists but the requested kitchen ticket does not", async () => {
+    const context = createProductionTestContext({
+      importProviderOrders: true,
+    });
+    const config = createRuntimeConfig();
+    const startSpy = vi.spyOn(context.repository, "startKitchenTicket");
+
+    try {
+      context.database
+        .prepare(
+          `
+            DELETE FROM kitchen_tickets
+            WHERE order_id = ? AND kitchen_id = ?
+          `,
+        )
+        .run("order_anota-101", "kitchen-2");
+
+      const response = await handlePatchKitchenTicketRoute(
+        createPatchRequest(
+          "/api/orders/order_anota-101/tickets/kitchen-2",
+          {
+            action: "start",
+          },
+          createCookieHeader(config, "kitchen-2"),
+        ),
+        {
+          kitchenId: "kitchen-2",
+          orderId: "order_anota-101",
+        },
+        {
+          config,
+          now: new Date("2026-05-13T12:00:00.000Z"),
+          repository: context.repository,
+        },
+      );
+
+      expect(response.status).toBe(404);
+      expect(await response.json()).toBe("Kitchen ticket not found");
+      expect(startSpy).not.toHaveBeenCalled();
     } finally {
       context.close();
     }
@@ -275,6 +462,76 @@ describe("protected order mutation routes", () => {
     }
   });
 
+  it("returns 404 for PATCH /api/orders/[orderId]/items/[itemId] when the order does not exist", async () => {
+    const context = createProductionTestContext({
+      importProviderOrders: true,
+    });
+    const config = createRuntimeConfig();
+    const updateSpy = vi.spyOn(context.repository, "updateItemStatus");
+
+    try {
+      const response = await handlePatchOrderItemRoute(
+        createPatchRequest(
+          "/api/orders/order_missing/items/order_missing__item-1",
+          {
+            status: "in_preparation",
+          },
+          createCookieHeader(config, "kitchen-1"),
+        ),
+        {
+          itemId: "order_missing__item-1",
+          orderId: "order_missing",
+        },
+        {
+          config,
+          now: new Date("2026-05-13T12:00:00.000Z"),
+          repository: context.repository,
+        },
+      );
+
+      expect(response.status).toBe(404);
+      expect(await response.json()).toBe("Order not found");
+      expect(updateSpy).not.toHaveBeenCalled();
+    } finally {
+      context.close();
+    }
+  });
+
+  it("returns 404 for PATCH /api/orders/[orderId]/items/[itemId] when the item does not exist", async () => {
+    const context = createProductionTestContext({
+      importProviderOrders: true,
+    });
+    const config = createRuntimeConfig();
+    const updateSpy = vi.spyOn(context.repository, "updateItemStatus");
+
+    try {
+      const response = await handlePatchOrderItemRoute(
+        createPatchRequest(
+          "/api/orders/order_anota-101/items/order_anota-101__missing",
+          {
+            status: "in_preparation",
+          },
+          createCookieHeader(config, "kitchen-1"),
+        ),
+        {
+          itemId: "order_anota-101__missing",
+          orderId: "order_anota-101",
+        },
+        {
+          config,
+          now: new Date("2026-05-13T12:00:00.000Z"),
+          repository: context.repository,
+        },
+      );
+
+      expect(response.status).toBe(404);
+      expect(await response.json()).toBe("Order item not found");
+      expect(updateSpy).not.toHaveBeenCalled();
+    } finally {
+      context.close();
+    }
+  });
+
   it.each([
     {
       cookieHeader: undefined,
@@ -343,4 +600,54 @@ describe("protected order mutation routes", () => {
       }
     },
   );
+
+  it("returns 400 for malformed JSON on protected ticket and item mutations", async () => {
+    const context = createProductionTestContext({
+      importProviderOrders: true,
+    });
+    const config = createRuntimeConfig();
+    const cookieHeader = createCookieHeader(config, "kitchen-1");
+
+    try {
+      const ticketResponse = await handlePatchKitchenTicketRoute(
+        createRawPatchRequest(
+          "/api/orders/order_anota-101/tickets/kitchen-1",
+          '{"action":',
+          cookieHeader,
+        ),
+        {
+          kitchenId: "kitchen-1",
+          orderId: "order_anota-101",
+        },
+        {
+          config,
+          now: new Date("2026-05-13T12:00:00.000Z"),
+          repository: context.repository,
+        },
+      );
+      const itemResponse = await handlePatchOrderItemRoute(
+        createRawPatchRequest(
+          "/api/orders/order_anota-101/items/order_anota-101__101-1",
+          '{"status":',
+          cookieHeader,
+        ),
+        {
+          itemId: "order_anota-101__101-1",
+          orderId: "order_anota-101",
+        },
+        {
+          config,
+          now: new Date("2026-05-13T12:00:00.000Z"),
+          repository: context.repository,
+        },
+      );
+
+      expect(ticketResponse.status).toBe(400);
+      expect(await ticketResponse.json()).toBe("Invalid JSON body");
+      expect(itemResponse.status).toBe(400);
+      expect(await itemResponse.json()).toBe("Invalid JSON body");
+    } finally {
+      context.close();
+    }
+  });
 });

@@ -7,6 +7,7 @@ import { isAreaId } from "@/src/domain/area-access";
 import {
   AreaAccessConfigurationError,
   createAreaSessionCookie,
+  shouldUseSecureAreaCookies,
   loadAreaAccessRuntimeConfig,
   type AreaAccessRuntimeConfig,
 } from "@/src/infrastructure/area-session";
@@ -90,7 +91,13 @@ export async function handlePostAccessSession(
       },
       {
         headers: {
-          "Set-Cookie": createAreaSessionCookie(session, runtime.config),
+          "Set-Cookie": createAreaSessionCookie(session, {
+            ...runtime.config,
+            secureCookies: shouldUseSecureAreaCookies(
+              request,
+              runtime.config.secureCookies,
+            ),
+          }),
         },
       },
     );

@@ -1,6 +1,6 @@
 # Roadmap
 
-Updated: `2026-05-11`
+Updated: `2026-05-13`
 
 This roadmap breaks the product into delivery stages and marks what is already done in the current repository.
 
@@ -75,7 +75,7 @@ Status: `[x] Delivered`
 
 ## Stage 5 — Real External Integration
 
-Status: `[~] Partially delivered / QA pending`
+Status: `[x] Delivered`
 
 - `[x]` Extend the provider boundary with a real Anota AI adapter
 - `[x]` Lock the ingestion strategy as webhook-first plus scheduled reconciliation
@@ -83,8 +83,12 @@ Status: `[~] Partially delivered / QA pending`
 - `[x]` Persist sync metadata and provider audit trail
 - `[x]` Surface sync exceptions in board, order detail, and salão
 - `[x]` Document the Phase 1 provider contract, ownership, and post-QA checklist
-- `[ ]` Verify live commands, scheduler behavior, and operator caveats with fresh QA evidence
-- `[ ]` Reconcile rollout docs against verified runtime behavior after QA
+- `[x]` Verify local commands, sync behavior, and operator caveats with fresh QA evidence
+- `[x]` Reconcile rollout docs against verified runtime behavior after QA
+- `[x]` Isolate seeded browser regression from live-mode `.env.local` drift in Playwright
+
+Post-QA note:
+Pilot-only follow-up items such as live credential ownership, provider console wiring, and production scheduler cadence remain explicit in [qa/live-integration-post-qa-checklist.md](../qa/live-integration-post-qa-checklist.md), but they no longer block the repository-side Stage 5 closure.
 
 ## Stage 6 — Operational Hardening
 
@@ -98,12 +102,12 @@ Status: `[ ] Planned`
 
 ## Stage 7 — Post-MVP Expansion
 
-Status: `[ ] Planned`
+Status: `[~] Partially delivered`
 
 - `[ ]` Kitchen SLA timers and urgency indicators
 - `[ ]` Expeditor-focused orchestration improvements
 - `[ ]` Manager analytics and reporting
-- `[ ]` Menu mapping maintenance UI
+- `[x]` Menu mapping maintenance UI with manual provider-assisted pull for new item keys
 - `[ ]` Multi-store or multi-kitchen generalization only after the current workflow is proven
 
 ## Current Baseline
@@ -118,6 +122,7 @@ The repository already has a functional local MVP with:
 - `[x]` authenticated Phase 1 sync routes
 - `[x]` provider sync exception visibility
 - `[x]` Phase 1 live integration documentation baseline
+- `[x]` Phase 1 QA evidence refreshed on `2026-05-13`
 - `[x]` lint passing
 - `[x]` test suite passing
 - `[x]` production build passing
@@ -126,5 +131,5 @@ The repository already has a functional local MVP with:
 
 Priority recommendation:
 
-1. Finish Stage 5 QA tasks and reconcile the docs with verified runtime evidence
-2. Stage 6 — harden the operation once the integration path is stable
+1. Stage 6 — harden the operation once the integration path is stable
+2. Move the remaining pilot-only rollout ownership items out of repository QA and into the deployment runbook

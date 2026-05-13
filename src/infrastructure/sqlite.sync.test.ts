@@ -115,6 +115,44 @@ function countRows(context: ReturnType<typeof createProductionTestContext>, tabl
 }
 
 describe("sqlite sync repository", () => {
+  it("enforces unique provider item ids and unique item names in kitchen mappings", () => {
+    const context = createProductionTestContext({
+      initialKitchenMappings: [],
+    });
+
+    try {
+      context.repository.upsertKitchenMapping({
+        kitchenId: "kitchen-2",
+        menuItemId: "uuid-club-sandwich",
+        menuItemName: "Club Sandwich",
+        providerItemId: "provider-item-club-sandwich",
+        providerExternalId: "club-sandwich",
+      });
+
+      expect(() =>
+        context.repository.upsertKitchenMapping({
+          kitchenId: "kitchen-2",
+          menuItemId: "uuid-club-sandwich-2",
+          menuItemName: "Club Sandwich",
+          providerItemId: "provider-item-other",
+          providerExternalId: "club-sandwich-2",
+        }),
+      ).toThrow(/unique/i);
+
+      expect(() =>
+        context.repository.upsertKitchenMapping({
+          kitchenId: "kitchen-2",
+          menuItemId: "uuid-club-sandwich-3",
+          menuItemName: "Outro Nome",
+          providerItemId: "provider-item-club-sandwich",
+          providerExternalId: "club-sandwich-3",
+        }),
+      ).toThrow(/unique/i);
+    } finally {
+      context.close();
+    }
+  });
+
   it("maps sync run and exception rows into typed records", () => {
     const run = mapSyncRunRow({
       id: "run-1",
@@ -765,7 +803,7 @@ describe("sqlite sync repository", () => {
       const runtimeRepository = getProductionRepository();
 
       expect(runtimeRepository.listKitchens()).toHaveLength(2);
-      expect(runtimeRepository.listKitchenMappings().length).toBeGreaterThan(0);
+      expect(runtimeRepository.listKitchenMappings()).toHaveLength(0);
       expect(runtimeRepository.listOrderAggregates()).toHaveLength(0);
       expect(runtimeRepository.listUnresolvedSyncExceptions()).toHaveLength(0);
     } finally {

@@ -28,6 +28,8 @@ const webhookEnvelopeExternalOrderIdPaths = [
   ["external_order_id"],
   ["orderId"],
   ["order_id"],
+  ["_id"],
+  ["id"],
   ["data", "id"],
   ["data", "_id"],
   ["payload", "id"],
@@ -49,6 +51,7 @@ export async function handlePostAnotaWebhook(
   dependencies: ProviderSyncRouteDependencies = {},
 ) {
   const unauthorizedResponse = authenticateSharedSecret(request.headers, {
+    additionalHeaderNames: ["authorization"],
     env: dependencies.env,
     secretEnvKey: "webhook",
     secretHeaderName: "webhook",
@@ -92,13 +95,20 @@ export function parseAnotaWebhookEnvelope(
   payload: Record<string, unknown>,
   headers: Headers,
 ): Pick<WebhookInput, "deliveryKey" | "eventType" | "externalOrderId"> | null {
+  const externalOrderId = readFirstOptionalString(
+    payload,
+    webhookEnvelopeExternalOrderIdPaths,
+  );
   const deliveryKey =
     normalizeOptionalString(headers.get("x-anota-delivery-key")) ??
     normalizeOptionalString(headers.get("x-delivery-key")) ??
     normalizeOptionalString(headers.get("x-webhook-delivery-key")) ??
     normalizeOptionalString(headers.get("x-request-id")) ??
-    readFirstOptionalString(payload, webhookEnvelopeDeliveryKeyPaths);
-  const eventType = readFirstOptionalString(payload, webhookEnvelopeEventTypePaths);
+    readFirstOptionalString(payload, webhookEnvelopeDeliveryKeyPaths) ??
+    buildSyntheticDeliveryKey(payload, externalOrderId);
+  const eventType =
+    readFirstOptionalString(payload, webhookEnvelopeEventTypePaths) ??
+    detectCanonicalOrderWebhookEventType(payload, externalOrderId);
 
   if (!deliveryKey || !eventType) {
     return null;
@@ -107,7 +117,7 @@ export function parseAnotaWebhookEnvelope(
   return {
     deliveryKey,
     eventType,
-    externalOrderId: readFirstOptionalString(payload, webhookEnvelopeExternalOrderIdPaths),
+    externalOrderId,
   };
 }
 
@@ -124,6 +134,46 @@ function readFirstOptionalString(
   }
 
   return undefined;
+}
+
+function detectCanonicalOrderWebhookEventType(
+  payload: Record<string, unknown>,
+  externalOrderId: string | undefined,
+) {
+  if (!externalOrderId) {
+    return undefined;
+  }
+
+  if (payload.canceled === true || payload.cancelled === true) {
+    return "order.canceled";
+  }
+
+  if (Array.isArray(payload.items) || "check" in payload || "salesChannel" in payload) {
+    return "order.updated";
+  }
+
+  return undefined;
+}
+
+function buildSyntheticDeliveryKey(
+  payload: Record<string, unknown>,
+  externalOrderId: string | undefined,
+) {
+  if (!externalOrderId) {
+    return undefined;
+  }
+
+  const versionToken =
+    normalizeOptionalString(payload.updatedAt) ??
+    normalizeOptionalString(payload.createdAt) ??
+    (payload.canceled === true || payload.cancelled === true
+      ? "canceled"
+      : undefined) ??
+    normalizeOptionalString(payload.menu_version) ??
+    normalizeOptionalString(payload.check) ??
+    "snapshot";
+
+  return `manual:${externalOrderId}:${versionToken}`;
 }
 
 export {

@@ -1,0 +1,18 @@
+Pedido criado:
+
+{"menu_version":2,"_id":"6a03b2a5fc326d1ea295e48f","id":"6a03b2a5fc326d1ea295e48f","check":1,"shortReference":252,"createdAt":"2026-05-12T23:07:17.929Z","type":"LOCAL","time_max":"2026-05-12T23:07:17.929Z","merchant":{"restaurantId":"","id":"69f1f2401749a4e61094297c","unit":"69f1f2401749a4e61094297e"},"payments":[{"name":"none","code":"none","value":71,"cardSelected":"","externalId":"","changeFor":0,"prepaid":false}],"customer":{"name":"Wesley ","phone":null},"items":[{"id":0,"name":"Croissant de frango","quantity":1,"externalId":"cbc6b6bc-22fc-437a-aaa3-20c79605ea50","internalId":"69fe73a2d3416d5327db3443","price":32.5,"total":32.5,"subItems":[]},{"id":0,"name":"Pão na chapa com requeijão ","quantity":1,"externalId":"af2cf15e-d20b-402e-94bc-9c7e9457c5cf","internalId":"69fe76e06be2eef560c820a2","price":12.5,"total":12.5,"subItems":[]},{"id":0,"name":"Pão de Queijo Tradicional","quantity":1,"externalId":"2b647fc5-649a-48cd-a29c-d40712033c25","internalId":"69fe733ffa15e7ec45ba5f4c","price":8,"total":8,"subItems":[]},{"id":0,"name":"Café expresso 80ml","quantity":1,"externalId":"797280be-5123-42e5-b8b3-32d39ffe2005","internalId":"69fe673120385b3adf828c10","price":8,"total":8,"subItems":[]},{"id":0,"name":"Café com leite 190ml","quantity":1,"externalId":"b6d8b1e2-c702-4429-986d-be67fe0274aa","internalId":"69fe6cc16be2eef560c68323","price":10,"total":10,"subItems":[]}],"total":71,"deliveryFee":0,"qr_description":"1","pdv":{"status":false},"additionalFees":[],"salesChannel":"anotaai","discounts":[]}
+
+Pedido atualizado
+
+{"menu_version":2,"_id":"6a03b382a441b402bedd2756","id":"6a03b382a441b402bedd2756","check":1,"shortReference":253,"createdAt":"2026-05-12T23:10:58.153Z","type":"LOCAL","time_max":"2026-05-12T23:10:58.153Z","merchant":{"restaurantId":"","id":"69f1f2401749a4e61094297c","unit":"69f1f2401749a4e61094297e"},"payments":[{"name":"none","code":"none","value":23,"cardSelected":"","externalId":"","changeFor":0,"prepaid":false}],"customer":{"name":"Wesley "},"items":[{"id":0,"name":"Café gelado Nutella (Iced latte) 430ml","quantity":1,"externalId":"e95308ef-c4ea-431b-a294-2a33c9e48543","internalId":"69fe70346be2eef560c71126","price":23,"total":23,"subItems":[]}],"total":23,"deliveryFee":0,"qr_description":"1","pdv":{"status":false},"additionalFees":[],"salesChannel":"anotaai","discounts":[]}
+
+Pedido cancelado
+
+{
+  "id": "6a03ad49fdcc75bcd0bff4ed",
+  "justification": "teste",
+  "canceled": true,
+  "merchant": {
+    "id": "69f1f2401749a4e61094297c"
+  }
+}

@@ -5,10 +5,12 @@ import {
   AreaAccessConfigurationError,
   clearAreaSessionCookie,
   createAreaSessionCookie,
+  getAreaRequestOrigin,
   loadAreaAccessRuntimeConfig,
   maybeCreateRenewedAreaSessionCookie,
   readAreaSessionCookieValue,
   signAreaSession,
+  shouldUseSecureAreaCookies,
   verifyAreaSessionFromCookieHeader,
   verifyAreaSessionValue,
 } from "@/src/infrastructure/area-session";
@@ -195,5 +197,21 @@ describe("area session infrastructure", () => {
         new Date("2026-05-13T12:01:00.000Z"),
       ),
     ).toContain("bistro_area_session=v1.");
+  });
+
+  it("derives request origin and cookie security from the effective request protocol", () => {
+    const proxiedRequest = new Request("http://internal/access/enter", {
+      headers: {
+        host: "127.0.0.1:3001",
+        "x-forwarded-host": "bistro.example.com",
+        "x-forwarded-proto": "https",
+      },
+    });
+    const localHttpRequest = new Request("http://127.0.0.1:3001/access/enter");
+
+    expect(getAreaRequestOrigin(proxiedRequest)).toBe("https://bistro.example.com");
+    expect(shouldUseSecureAreaCookies(proxiedRequest, true)).toBe(true);
+    expect(shouldUseSecureAreaCookies(localHttpRequest, true)).toBe(false);
+    expect(shouldUseSecureAreaCookies(localHttpRequest, false)).toBe(false);
   });
 });

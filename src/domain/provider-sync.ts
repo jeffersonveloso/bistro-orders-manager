@@ -59,6 +59,7 @@ export interface ProviderOrderSnapshotItemModifier {
 
 export interface ProviderOrderSnapshotItem {
   externalItemId: string;
+  providerItemId?: string | null;
   catalogExternalId: string | null;
   name: string;
   quantity: number;
@@ -69,6 +70,7 @@ export interface ProviderOrderSnapshotItem {
 export interface ProviderOrderSnapshot extends ProviderOrderReference {
   reference: string;
   customerName?: string;
+  waiterName?: string;
   channel: string;
   providerStatus: string;
   lifecycle: ProviderOrderLifecycle;
@@ -81,6 +83,20 @@ export interface ProviderOrderSnapshot extends ProviderOrderReference {
 export interface ListConfirmedOrdersInput {
   updatedSince?: string;
   limit?: number;
+}
+
+export interface ListCatalogItemsInput {
+  updatedSince?: string;
+  limit?: number;
+}
+
+export interface ProviderCatalogItem {
+  provider: ProviderName;
+  providerItemId: string;
+  providerExternalId: string | null;
+  name: string;
+  updatedAt: string;
+  rawPayload: unknown;
 }
 
 export interface WebhookInput {

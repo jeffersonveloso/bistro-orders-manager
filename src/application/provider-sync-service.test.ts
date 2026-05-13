@@ -115,15 +115,19 @@ function createMutableSyncProvider(
         channel: snapshot.channel,
         createdAt: snapshot.providerUpdatedAt,
         items: snapshot.items.map((item) => {
-          if (!item.catalogExternalId) {
+          const providerRoutingKey = item.catalogExternalId ?? item.providerItemId;
+
+          if (!providerRoutingKey) {
             throw new Error(
-              `Item "${item.externalItemId}" is missing catalogExternalId`,
+              `Item "${item.externalItemId}" is missing catalogExternalId and providerItemId`,
             );
           }
 
           return {
             externalItemId: item.externalItemId,
-            menuItemId: item.catalogExternalId,
+            menuItemId: providerRoutingKey,
+            providerItemId: item.providerItemId ?? null,
+            providerExternalId: item.catalogExternalId ?? null,
             name: item.name,
             quantity: item.quantity,
             notes: item.notes,
@@ -530,6 +534,59 @@ describe("provider sync service", () => {
     }
   });
 
+  it("imports a confirmed order by provider item id when the provider order line has no external id", async () => {
+    const snapshot = createSnapshot("external-provider-item-fallback", {
+      items: [
+        {
+          externalItemId: "external-provider-item-fallback-item",
+          providerItemId: "provider-item-cappuccino",
+          catalogExternalId: null,
+          name: "Cappuccino italiano 190ml",
+          quantity: 1,
+          modifiers: [],
+        },
+      ],
+    });
+    const provider = createMutableSyncProvider([snapshot]);
+    const context = createProductionTestContext({
+      initialKitchenMappings: [
+        {
+          kitchenId: "kitchen-1",
+          menuItemId: "uuid-cappuccino",
+          menuItemName: "Cappuccino italiano 190ml",
+          providerItemId: "provider-item-cappuccino",
+          providerExternalId: null,
+        },
+      ],
+    });
+    const service = createProviderSyncService({
+      provider,
+      repository: context.repository,
+    });
+
+    try {
+      const result = await service.reconcileConfirmedOrders({
+        provider: "anota_ai",
+        externalOrderId: snapshot.externalOrderId,
+      });
+
+      expect(result).toEqual(
+        expect.objectContaining({
+          status: "completed",
+          imported: 1,
+          openedExceptions: 0,
+        }),
+      );
+      const importedOrder = context.repository
+        .listOrderAggregates()
+        .find((aggregate) => aggregate.order.id === `order_${snapshot.externalOrderId}`);
+      expect(importedOrder?.items[0]?.menuItemId).toBe("uuid-cappuccino");
+      expect(context.repository.listUnresolvedSyncExceptions()).toEqual([]);
+    } finally {
+      context.close();
+    }
+  });
+
   it("opens canceled_externally for imported orders without mutating kitchen entities", async () => {
     const snapshot = createSnapshot("external-canceled");
     const provider = createMutableSyncProvider([snapshot]);
@@ -618,6 +675,69 @@ describe("provider sync service", () => {
           processed: 1,
           openedExceptions: 1,
           errorCount: 0,
+        }),
+      );
+      expect(context.repository.listUnresolvedSyncExceptions()).toEqual([
+        expect.objectContaining({
+          kind: "canceled_externally",
+          externalOrderId: snapshot.externalOrderId,
+          orderId: imported.orderId,
+        }),
+      ]);
+    } finally {
+      context.close();
+    }
+  });
+
+  it("opens canceled_externally for imported orders even when the canceled snapshot can no longer be normalized for production", async () => {
+    const snapshot = createSnapshot("external-webhook-canceled");
+    const provider = createMutableSyncProvider([snapshot]);
+    const context = createProductionTestContext();
+    const service = createProviderSyncService({
+      provider,
+      repository: context.repository,
+    });
+
+    try {
+      const imported = await service.handleWebhook({
+        provider: "anota_ai",
+        deliveryKey: "delivery-webhook-canceled-1",
+        eventType: "order.confirmed",
+        externalOrderId: snapshot.externalOrderId,
+        payload: { id: snapshot.externalOrderId },
+      });
+
+      provider.setSnapshot(
+        createSnapshot("external-webhook-canceled", {
+          lifecycle: "canceled",
+          providerStatus: "CANCELED",
+          providerUpdatedAt: "2026-05-11T12:09:00.000Z",
+          items: [
+            {
+              externalItemId: "external-webhook-canceled-drink",
+              catalogExternalId: null,
+              name: "Café gelado",
+              quantity: 1,
+              modifiers: [],
+            },
+          ],
+        }),
+      );
+
+      const canceled = await service.handleWebhook({
+        provider: "anota_ai",
+        deliveryKey: "delivery-webhook-canceled-2",
+        eventType: "order.canceled",
+        externalOrderId: snapshot.externalOrderId,
+        payload: { id: snapshot.externalOrderId, check: 4 },
+      });
+
+      expect(canceled).toEqual(
+        expect.objectContaining({
+          status: "completed",
+          outcome: "exception_opened",
+          exceptionKind: "canceled_externally",
+          orderId: imported.orderId,
         }),
       );
       expect(context.repository.listUnresolvedSyncExceptions()).toEqual([
@@ -806,6 +926,95 @@ describe("provider sync service", () => {
             expect.objectContaining({
               type: "quantity_changed",
               externalItemId: "external-changed-drink",
+            }),
+          ]),
+        }),
+      );
+    } finally {
+      context.close();
+    }
+  });
+
+  it("detects item removal by routing key when Anota reuses the same line identifier for multiple items", async () => {
+    const snapshot = createSnapshot("external-duplicate-line-ids", {
+      items: [
+        {
+          externalItemId: "0",
+          catalogExternalId: "iced-coffee",
+          name: "Café gelado",
+          quantity: 1,
+          modifiers: [],
+        },
+        {
+          externalItemId: "0",
+          catalogExternalId: "croissant",
+          name: "Croissant",
+          quantity: 1,
+          modifiers: [],
+        },
+      ],
+    });
+    const provider = createMutableSyncProvider([snapshot]);
+    const context = createProductionTestContext();
+    const service = createProviderSyncService({
+      provider,
+      repository: context.repository,
+    });
+
+    try {
+      const imported = await service.handleWebhook({
+        provider: "anota_ai",
+        deliveryKey: "delivery-duplicate-line-ids-1",
+        eventType: "order.confirmed",
+        externalOrderId: snapshot.externalOrderId,
+        payload: { id: snapshot.externalOrderId },
+      });
+
+      provider.setSnapshot(
+        createSnapshot("external-duplicate-line-ids", {
+          providerUpdatedAt: "2026-05-11T12:09:00.000Z",
+          items: [
+            {
+              externalItemId: "0",
+              catalogExternalId: "iced-coffee",
+              name: "Café gelado",
+              quantity: 1,
+              modifiers: [],
+            },
+          ],
+        }),
+      );
+
+      const changed = await service.handleWebhook({
+        provider: "anota_ai",
+        deliveryKey: "delivery-duplicate-line-ids-2",
+        eventType: "order.updated",
+        externalOrderId: snapshot.externalOrderId,
+        payload: { id: snapshot.externalOrderId },
+      });
+
+      expect(changed).toEqual(
+        expect.objectContaining({
+          status: "completed",
+          outcome: "exception_opened",
+          exceptionKind: "changed_externally",
+          orderId: imported.orderId,
+        }),
+      );
+      expect(
+        context.repository
+          .listSyncExceptionsForOrder(imported.orderId!)
+          .find((exception) => exception.kind === "changed_externally")?.details,
+      ).toEqual(
+        expect.objectContaining({
+          diffs: expect.arrayContaining([
+            expect.objectContaining({
+              type: "item_removed",
+              matchKey: "route:croissant",
+              before: expect.objectContaining({
+                menuItemId: "croissant",
+                name: "Croissant",
+              }),
             }),
           ]),
         }),
@@ -1032,7 +1241,7 @@ describe("provider sync service", () => {
     }
   });
 
-  it("bounds replay safety-net work when historical imported orders fall out of confirmed listings", async () => {
+  it("bounds replay safety-net work and advances through the historical backlog across runs", async () => {
     const totalImportedOrders = 60;
     const snapshots = Array.from({ length: totalImportedOrders }, (_, index) =>
       createSnapshot(`external-bounded-${index}`, {
@@ -1086,9 +1295,31 @@ describe("provider sync service", () => {
         unresolvedExceptions.some(
           (exception) => exception.externalOrderId === "external-bounded-0",
         ),
-      ).toBe(false);
+      ).toBe(true);
       expect(
         unresolvedExceptions.some(
+          (exception) => exception.externalOrderId === "external-bounded-59",
+        ),
+      ).toBe(false);
+
+      currentNow = atTime(14, 5);
+      const replayedBacklog = await service.reconcileConfirmedOrders({
+        provider: "anota_ai",
+      });
+      const replayedBacklogExceptions =
+        context.repository.listUnresolvedSyncExceptions();
+
+      expect(replayedBacklog).toEqual(
+        expect.objectContaining({
+          status: "completed",
+          processed: 50,
+          openedExceptions: 50,
+          errorCount: 0,
+        }),
+      );
+      expect(replayedBacklogExceptions).toHaveLength(60);
+      expect(
+        replayedBacklogExceptions.some(
           (exception) => exception.externalOrderId === "external-bounded-59",
         ),
       ).toBe(true);

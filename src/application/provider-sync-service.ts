@@ -8,7 +8,6 @@ import type {
 } from "@/src/application/ports";
 import type {
   OrderAggregate,
-  RawProviderOrderInput,
 } from "@/src/domain/production";
 import type {
   ProviderName,
@@ -67,6 +66,7 @@ interface RelevantChangeDiff {
     | "order_notes_changed"
     | "modifiers_changed";
   externalItemId?: string;
+  matchKey?: string;
   before?: unknown;
   after?: unknown;
 }
@@ -79,6 +79,8 @@ interface SnapshotComparisonModifier {
 
 interface SnapshotComparisonItem {
   externalItemId: string;
+  matchKey: string;
+  routingKey: string | null;
   catalogExternalId: string | null;
   name: string;
   notes: string | null;
@@ -106,7 +108,7 @@ interface ImportedOrderContext {
 
 interface ReplayCandidate {
   externalOrderId: string;
-  replayCursor: string;
+  priorityCursor: string;
 }
 
 export function createProviderSyncService(
@@ -507,22 +509,6 @@ function syncCanonicalSnapshot({
   repository: ProviderSyncRepositoryBundle;
   snapshot: ProviderOrderSnapshot;
 }): CandidateResult {
-  let normalizedOrder: RawProviderOrderInput;
-
-  try {
-    normalizedOrder = normalizeSnapshotOrThrow(provider, snapshot);
-  } catch (error) {
-    return repository.runInTransaction(() =>
-      openIngestionFailure({
-        context,
-        errorCode: "normalization_failed",
-        errorMessage: extractErrorMessage(error),
-        externalOrderId: snapshot.externalOrderId,
-        repository,
-      }),
-    );
-  }
-
   return repository.runInTransaction(() => {
     const importedContext = findImportedOrderByExternalId(
       repository,
@@ -533,7 +519,7 @@ function syncCanonicalSnapshot({
     if (!importedContext) {
       return applyNotYetImportedSnapshot({
         context,
-        normalizedOrder,
+        provider,
         repository,
         snapshot,
       });
@@ -542,7 +528,6 @@ function syncCanonicalSnapshot({
     return applyImportedSnapshot({
       context,
       importedContext,
-      normalizedOrder,
       repository,
       snapshot,
     });
@@ -551,12 +536,12 @@ function syncCanonicalSnapshot({
 
 function applyNotYetImportedSnapshot({
   context,
-  normalizedOrder,
+  provider,
   repository,
   snapshot,
 }: {
   context: CandidateContext;
-  normalizedOrder: RawProviderOrderInput;
+  provider: OrderSyncProviderPort;
   repository: ProviderSyncRepositoryBundle;
   snapshot: ProviderOrderSnapshot;
 }): CandidateResult {
@@ -590,6 +575,7 @@ function applyNotYetImportedSnapshot({
   }
 
   try {
+    const normalizedOrder = normalizeSnapshotOrThrow(provider, snapshot);
     const splitResult = splitProviderOrder(
       normalizedOrder,
       repository.listKitchenMappings(),
@@ -624,7 +610,13 @@ function applyNotYetImportedSnapshot({
     };
   } catch (error) {
     if (!(error instanceof MissingKitchenMappingError)) {
-      throw error;
+      return openIngestionFailure({
+        context,
+        errorCode: "normalization_failed",
+        errorMessage: extractErrorMessage(error),
+        externalOrderId: snapshot.externalOrderId,
+        repository,
+      });
     }
 
     repository.upsertProviderOrder(state);
@@ -636,7 +628,7 @@ function applyNotYetImportedSnapshot({
       sourceEventId: context.sourceEventId,
       summary: `Pedido ${snapshot.reference} bloqueado por item sem mapeamento de cozinha`,
       details: {
-        menuItemId: error.menuItemId,
+        providerExternalId: error.providerExternalId,
         menuItemName: error.menuItemName,
         reference: snapshot.reference,
       },
@@ -663,13 +655,11 @@ function applyNotYetImportedSnapshot({
 function applyImportedSnapshot({
   context,
   importedContext,
-  normalizedOrder,
   repository,
   snapshot,
 }: {
   context: CandidateContext;
   importedContext: ImportedOrderContext;
-  normalizedOrder: RawProviderOrderInput;
   repository: ProviderSyncRepositoryBundle;
   snapshot: ProviderOrderSnapshot;
 }): CandidateResult {
@@ -774,7 +764,6 @@ function applyImportedSnapshot({
   const relevantChange = classifyRelevantChange({
     baseline,
     importedOrder: importedContext.aggregate,
-    normalizedOrder,
     snapshot,
   });
 
@@ -1086,103 +1075,109 @@ function findImportedOrderByExternalId(
 function classifyRelevantChange({
   baseline,
   importedOrder,
-  normalizedOrder,
   snapshot,
 }: {
   baseline: SnapshotComparisonState | null;
   importedOrder: OrderAggregate;
-  normalizedOrder: RawProviderOrderInput;
   snapshot: ProviderOrderSnapshot;
 }): RelevantChangeResult {
   const current = buildComparisonState(snapshot)!;
   const expectedBaseline =
     baseline ??
-    buildComparisonStateFromImportedOrder(importedOrder, normalizedOrder.externalId);
-  const importedItemsByExternalId = new Map(
-    importedOrder.items.map((item) => [item.externalItemId, item]),
-  );
-  const normalizedItemsByExternalId = new Map(
-    normalizedOrder.items.map((item) => [item.externalItemId, item]),
-  );
+    buildComparisonStateFromImportedOrder(
+      importedOrder,
+      snapshot.externalOrderId,
+    );
   const baselineItemsByExternalId = new Map(
-    expectedBaseline.items.map((item) => [item.externalItemId, item]),
+    expectedBaseline.items.map((item) => [item.matchKey, item]),
+  );
+  const currentItemsByExternalId = new Map(
+    current.items.map((item) => [item.matchKey, item]),
   );
   const diffs: RelevantChangeDiff[] = [];
 
-  for (const [externalItemId, importedItem] of importedItemsByExternalId) {
-    const currentItem = normalizedItemsByExternalId.get(externalItemId);
+  for (const [matchKey, baselineItem] of baselineItemsByExternalId) {
+    const currentItem = currentItemsByExternalId.get(matchKey);
 
     if (!currentItem) {
       diffs.push({
         type: "item_removed",
-        externalItemId,
+        externalItemId: baselineItem.externalItemId,
+        matchKey,
         before: {
-          menuItemId: importedItem.menuItemId,
-          quantity: importedItem.quantity,
+          menuItemId: baselineItem.routingKey,
+          name: baselineItem.name,
+          notes: baselineItem.notes,
+          quantity: baselineItem.quantity,
         },
       });
       continue;
     }
 
-    if (currentItem.menuItemId !== importedItem.menuItemId) {
+    if (
+      baselineItem.catalogExternalId &&
+      currentItem.catalogExternalId !== baselineItem.catalogExternalId
+    ) {
       diffs.push({
         type: "menu_item_changed",
-        externalItemId,
-        before: importedItem.menuItemId,
-        after: currentItem.menuItemId,
+        externalItemId: baselineItem.externalItemId,
+        matchKey,
+        before: baselineItem.catalogExternalId,
+        after: currentItem.catalogExternalId,
       });
     }
 
-    if (currentItem.name !== importedItem.name) {
+    if (currentItem.name !== baselineItem.name) {
       diffs.push({
         type: "name_changed",
-        externalItemId,
-        before: importedItem.name,
+        externalItemId: baselineItem.externalItemId,
+        matchKey,
+        before: baselineItem.name,
         after: currentItem.name,
       });
     }
 
-    if (currentItem.quantity !== importedItem.quantity) {
+    if (currentItem.quantity !== baselineItem.quantity) {
       diffs.push({
         type: "quantity_changed",
-        externalItemId,
-        before: importedItem.quantity,
+        externalItemId: baselineItem.externalItemId,
+        matchKey,
+        before: baselineItem.quantity,
         after: currentItem.quantity,
       });
     }
 
-    if (normalizeNullableText(currentItem.notes) !== importedItem.notes) {
+    if (normalizeNullableText(currentItem.notes) !== baselineItem.notes) {
       diffs.push({
         type: "item_notes_changed",
-        externalItemId,
-        before: importedItem.notes,
+        externalItemId: baselineItem.externalItemId,
+        matchKey,
+        before: baselineItem.notes,
         after: normalizeNullableText(currentItem.notes),
       });
     }
 
-    const baselineItem = baselineItemsByExternalId.get(externalItemId);
-
-    if (
-      baselineItem &&
-      modifiersSignature(currentItemFromSnapshot(current.items, externalItemId)?.modifiers) !==
-        modifiersSignature(baselineItem.modifiers)
-    ) {
+    if (modifiersSignature(currentItem.modifiers) !== modifiersSignature(baselineItem.modifiers)) {
       diffs.push({
         type: "modifiers_changed",
-        externalItemId,
+        externalItemId: baselineItem.externalItemId,
+        matchKey,
         before: baselineItem.modifiers,
-        after: currentItemFromSnapshot(current.items, externalItemId)?.modifiers ?? [],
+        after: currentItem.modifiers,
       });
     }
   }
 
-  for (const [externalItemId, currentItem] of normalizedItemsByExternalId) {
-    if (!importedItemsByExternalId.has(externalItemId)) {
+  for (const [matchKey, currentItem] of currentItemsByExternalId) {
+    if (!baselineItemsByExternalId.has(matchKey)) {
       diffs.push({
         type: "item_added",
-        externalItemId,
+        externalItemId: currentItem.externalItemId,
+        matchKey,
         after: {
-          menuItemId: currentItem.menuItemId,
+          menuItemId: currentItem.routingKey,
+          name: currentItem.name,
+          notes: currentItem.notes,
           quantity: currentItem.quantity,
         },
       });
@@ -1218,6 +1213,11 @@ function buildComparisonState(
     items: snapshot.items
       .map((item) => ({
         externalItemId: item.externalItemId,
+        matchKey: buildSnapshotItemMatchKey(
+          item.catalogExternalId ?? item.providerItemId ?? null,
+          item.name,
+        ),
+        routingKey: item.catalogExternalId ?? item.providerItemId ?? null,
         catalogExternalId: item.catalogExternalId,
         name: item.name,
         notes: normalizeNullableText(item.notes),
@@ -1247,7 +1247,9 @@ function buildComparisonStateFromImportedOrder(
     items: importedOrder.items
       .map((item) => ({
         externalItemId: item.externalItemId,
-        catalogExternalId: item.menuItemId,
+        matchKey: buildSnapshotItemMatchKey(item.menuItemId, item.name),
+        routingKey: item.menuItemId,
+        catalogExternalId: null,
         name: item.name,
         notes: item.notes,
         quantity: item.quantity,
@@ -1255,13 +1257,6 @@ function buildComparisonStateFromImportedOrder(
       }))
       .sort((left, right) => left.externalItemId.localeCompare(right.externalItemId)),
   };
-}
-
-function currentItemFromSnapshot(
-  items: SnapshotComparisonItem[],
-  externalItemId: string,
-) {
-  return items.find((item) => item.externalItemId === externalItemId);
 }
 
 function readComparisonStateFromException(
@@ -1315,6 +1310,17 @@ function buildModifierSortKey(modifier: SnapshotComparisonModifier) {
   return `${modifier.name}::${modifier.quantity ?? ""}::${modifier.notes ?? ""}`;
 }
 
+function buildSnapshotItemMatchKey(
+  routingKey: string | null,
+  name: string,
+) {
+  if (routingKey) {
+    return `route:${routingKey}`;
+  }
+
+  return `name:${name.trim().toLowerCase()}`;
+}
+
 function selectImportedReplayExternalOrderIds({
   confirmedCandidates,
   input,
@@ -1337,6 +1343,10 @@ function selectImportedReplayExternalOrderIds({
     confirmedCandidates.map((snapshot) => snapshot.externalOrderId),
   );
   const updatedSinceMs = parseTimestampMs(input.updatedSince);
+  const compareReplayCandidates =
+    updatedSinceMs === null
+      ? compareReplayCandidatesAsc
+      : compareReplayCandidatesDesc;
 
   return [...new Set(repository.listImportedExternalOrderIds())]
     .filter((externalOrderId) => !confirmedExternalOrderIds.has(externalOrderId))
@@ -1345,29 +1355,32 @@ function selectImportedReplayExternalOrderIds({
         provider: input.provider,
         externalOrderId,
       });
-      const replayCursor = state ? selectReplayCursor(state) : null;
 
-      if (!replayCursor) {
+      if (!state) {
         return null;
       }
 
-      const replayCursorMs = parseTimestampMs(replayCursor);
+      const replayFilterCursor = selectReplayFilterCursor(state);
+      const replayFilterCursorMs = parseTimestampMs(replayFilterCursor);
 
       if (
         updatedSinceMs !== null &&
-        replayCursorMs !== null &&
-        replayCursorMs < updatedSinceMs
+        replayFilterCursorMs !== null &&
+        replayFilterCursorMs < updatedSinceMs
       ) {
         return null;
       }
 
       return {
         externalOrderId,
-        replayCursor,
+        priorityCursor: selectReplayPriorityCursor({
+          hasUpdatedSince: updatedSinceMs !== null,
+          state,
+        }),
       } satisfies ReplayCandidate;
     })
     .filter((candidate): candidate is ReplayCandidate => candidate !== null)
-    .sort(compareReplayCandidatesDesc)
+    .sort(compareReplayCandidates)
     .slice(0, replayBudget)
     .map((candidate) => candidate.externalOrderId);
 }
@@ -1386,16 +1399,40 @@ function resolveReplayBudget({
   return DEFAULT_RECONCILIATION_REPLAY_LIMIT;
 }
 
-function selectReplayCursor(state: ProviderOrderState) {
-  return state.lastAppliedAt ?? state.lastSeenAt;
+function selectReplayFilterCursor(state: ProviderOrderState) {
+  return state.lastSeenAt;
+}
+
+function selectReplayPriorityCursor({
+  hasUpdatedSince,
+  state,
+}: {
+  hasUpdatedSince: boolean;
+  state: ProviderOrderState;
+}) {
+  return hasUpdatedSince ? state.lastSeenAt : state.lastAppliedAt ?? state.lastSeenAt;
+}
+
+function compareReplayCandidatesAsc(
+  left: ReplayCandidate,
+  right: ReplayCandidate,
+) {
+  const leftTimestamp = parseTimestampMs(left.priorityCursor) ?? 0;
+  const rightTimestamp = parseTimestampMs(right.priorityCursor) ?? 0;
+
+  if (leftTimestamp === rightTimestamp) {
+    return left.externalOrderId.localeCompare(right.externalOrderId);
+  }
+
+  return leftTimestamp - rightTimestamp;
 }
 
 function compareReplayCandidatesDesc(
   left: ReplayCandidate,
   right: ReplayCandidate,
 ) {
-  const leftTimestamp = parseTimestampMs(left.replayCursor) ?? 0;
-  const rightTimestamp = parseTimestampMs(right.replayCursor) ?? 0;
+  const leftTimestamp = parseTimestampMs(left.priorityCursor) ?? 0;
+  const rightTimestamp = parseTimestampMs(right.priorityCursor) ?? 0;
 
   if (leftTimestamp === rightTimestamp) {
     return left.externalOrderId.localeCompare(right.externalOrderId);

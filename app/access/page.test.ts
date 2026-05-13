@@ -107,4 +107,47 @@ describe("/access page", () => {
       }),
     ).rejects.toThrow("NEXT_REDIRECT:/salon");
   });
+
+  it("keeps the access screen available in switch mode for an active session", async () => {
+    cookiesMock.mockResolvedValue({
+      get(name: string) {
+        if (name !== areaAccessCookieName) {
+          return undefined;
+        }
+
+        return {
+          value: signAreaSession(
+            {
+              areaId: "kitchen-1",
+              expiresAt: "2099-05-13T16:00:00.000Z",
+              issuedAt: "2099-05-13T00:00:00.000Z",
+              version: 1,
+            },
+            {
+              sessionSecret: "page-secret",
+            },
+          ),
+        };
+      },
+    });
+
+    const { default: AccessPage } = await import("@/app/access/page");
+    const result = (await AccessPage({
+      searchParams: Promise.resolve({ mode: "switch" }),
+    })) as {
+      props: {
+        initialNotice?: {
+          message: string;
+          tone: string;
+        };
+      };
+    };
+
+    expect(redirectMock).not.toHaveBeenCalled();
+    expect(result.props.initialNotice).toEqual({
+      message:
+        "Modo de troca de area ativo. Escolha a proxima area e informe o PIN para continuar.",
+      tone: "info",
+    });
+  });
 });

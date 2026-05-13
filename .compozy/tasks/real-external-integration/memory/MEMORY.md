@@ -5,6 +5,7 @@ Keep only durable, cross-task context here. Do not duplicate facts that are obvi
 ## Current State
 - Task 02 added durable SQLite sync persistence and repository coverage for provider events, sync runs, provider order state, and sync exceptions.
 - Task 05 exposed authenticated webhook, reconciliation, and exception-acknowledge routes on the App Router, with route tests covering auth, duplicate delivery, replayable failures, and idempotent acknowledgment.
+- Task 09 completed the final local QA pass, refreshed `qa/verification-report.md`, and fixed the live bootstrap so fresh `anota_ai` databases no longer seed demo orders or demo sync exceptions.
 
 ## Shared Decisions
 - Operationally visible sync exceptions are treated as all unresolved records (`open` and `acknowledged`); only `resolved` removes them from board/detail/salão decoration queries.
@@ -12,6 +13,7 @@ Keep only durable, cross-task context here. Do not duplicate facts that are obvi
 - Phase 1 provider normalization accepts only catalog external IDs (`externalId` / `external_id`) as the bridge into internal `menuItemId`; missing identifiers must fail sync normalization instead of falling back to item names.
 - Live provider orchestration now lives in `src/application/provider-sync-service.ts`; `src/application/order-sync-service.ts` remains only as the legacy/demo importer used by startup seed flows.
 - Shared-secret route auth is centralized in `app/api/_lib/provider-sync-route.ts` using `BISTRO_ANOTA_WEBHOOK_SECRET` + `x-bistro-anota-webhook-secret` for webhook traffic and `BISTRO_INTERNAL_SYNC_SECRET` + `x-bistro-internal-sync-secret` for reconciliation traffic.
+- Runtime repository bootstrap depends on provider mode: `mock` still seeds demo orders/scenarios/exceptions, while `anota_ai` seeds only kitchens plus menu mappings on a fresh SQLite file.
 
 ## Shared Learnings
 - `recordInboundEvent` intentionally relies on the SQLite `(provider, delivery_key)` uniqueness constraint and will throw on duplicate deliveries; later sync orchestration should catch that and convert it into duplicate/idempotent behavior.
@@ -20,8 +22,10 @@ Keep only durable, cross-task context here. Do not duplicate facts that are obvi
 - `OrderSyncProviderPort.listConfirmedOrders()` should be treated as unbounded when `limit` is omitted; the real Anota adapter now paginates across all available `/ping/list` pages instead of truncating to the first page.
 - Successful replay/apply must resolve `ingestion_failed` by `external_order_id` even when older failures were linked with different `order_id` values, because the same external order can fail before and after import.
 - The webhook route treats `deliveryKey` plus `eventType` as the minimum usable envelope; missing `externalOrderId` is intentionally allowed through so the shared sync service records replayable `ingestion_failed` instead of the route short-circuiting with `400`.
+- The `qa-execution` skill was usable as process guidance, but this repository does not contain the referenced discovery helper `scripts/discover-project-contract.py`, so QA command discovery must fall back to `package.json`, config files, and existing `qa/` artifacts.
 
 ## Open Risks
+- Live credential ownership (`BISTRO_ANOTA_AI_TOKEN`, webhook secret, internal sync secret) and production scheduler cadence remain unverified because task 09 had only a local fake-provider environment, not a real Anota pilot target.
 
 ## Handoffs
 - Task 04 can build orchestration directly on `runInTransaction`, sync run finishing, provider order upserts, and exception open/acknowledge/resolve methods now present in `src/infrastructure/sqlite.ts`.
