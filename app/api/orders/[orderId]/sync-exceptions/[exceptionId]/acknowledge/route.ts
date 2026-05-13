@@ -1,4 +1,8 @@
 import {
+  type AreaAccessRouteDependencies,
+  withSalonArea,
+} from "@/app/api/_lib/area-access-route";
+import {
   createRuntimeAcknowledgeSyncService,
   jsonNoStore,
   normalizeOptionalString,
@@ -9,6 +13,10 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+interface AcknowledgeSyncExceptionRouteDependencies
+  extends ProviderSyncRouteDependencies,
+    AreaAccessRouteDependencies {}
+
 export async function handlePostAcknowledgeSyncException(
   request: Request,
   {
@@ -18,42 +26,48 @@ export async function handlePostAcknowledgeSyncException(
     exceptionId: string;
     orderId: string;
   },
-  dependencies: ProviderSyncRouteDependencies = {},
+  dependencies: AcknowledgeSyncExceptionRouteDependencies = {},
 ) {
-  const body = await readJsonObject(request, { allowEmpty: true });
+  return withSalonArea(
+    request,
+    async () => {
+      const body = await readJsonObject(request, { allowEmpty: true });
 
-  if (!body.ok) {
-    return body.response;
-  }
+      if (!body.ok) {
+        return body.response;
+      }
 
-  const resolutionNote = normalizeOptionalString(body.value.resolutionNote);
+      const resolutionNote = normalizeOptionalString(body.value.resolutionNote);
 
-  if ("resolutionNote" in body.value && typeof resolutionNote === "undefined") {
-    return jsonNoStore("Invalid resolutionNote", { status: 400 });
-  }
+      if ("resolutionNote" in body.value && typeof resolutionNote === "undefined") {
+        return jsonNoStore("Invalid resolutionNote", { status: 400 });
+      }
 
-  const service = dependencies.service ?? createRuntimeAcknowledgeSyncService();
+      const service = dependencies.service ?? createRuntimeAcknowledgeSyncService();
 
-  try {
-    await service.acknowledgeException({
-      acknowledgedVia: "salon_ui",
-      exceptionId,
-      orderId,
-      resolutionNote,
-    });
-  } catch (error) {
-    if (isMissingExceptionError(error)) {
-      return jsonNoStore("Sync exception not found", { status: 404 });
-    }
+      try {
+        await service.acknowledgeException({
+          acknowledgedVia: "salon_ui",
+          exceptionId,
+          orderId,
+          resolutionNote,
+        });
+      } catch (error) {
+        if (isMissingExceptionError(error)) {
+          return jsonNoStore("Sync exception not found", { status: 404 });
+        }
 
-    throw error;
-  }
+        throw error;
+      }
 
-  return jsonNoStore({
-    exceptionId,
-    orderId,
-    status: "acknowledged",
-  });
+      return jsonNoStore({
+        exceptionId,
+        orderId,
+        status: "acknowledged",
+      });
+    },
+    dependencies,
+  );
 }
 
 export async function POST(

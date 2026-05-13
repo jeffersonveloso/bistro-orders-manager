@@ -1,8 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createProviderSyncService } from "@/src/application/provider-sync-service";
-import type { OrderSyncProviderPort } from "@/src/application/ports";
+import type {
+  OrderSyncProviderPort,
+  ProviderSyncService,
+} from "@/src/application/ports";
 import type { ProviderOrderSnapshot } from "@/src/domain/provider-sync";
+import type { AreaAccessRuntimeConfig } from "@/src/infrastructure/area-session";
+import { signAreaSession } from "@/src/infrastructure/area-session";
 import { createProductionTestContext } from "@/src/infrastructure/sqlite";
 import {
   handlePostAnotaWebhook,
@@ -167,6 +172,39 @@ function createJsonRequest(
     },
     body: typeof body === "undefined" ? undefined : JSON.stringify(body),
   });
+}
+
+function createRuntimeConfig(): AreaAccessRuntimeConfig {
+  return {
+    cookieName: "bistro_area_session",
+    pins: {
+      "kitchen-1": "1111",
+      "kitchen-2": "2222",
+      salon: "3333",
+    },
+    renewalWindowMs: 4 * 60 * 60 * 1000,
+    renewalWindowRatio: 0.25,
+    secureCookies: false,
+    sessionSecret: "route-secret",
+    sessionTtlHours: 16,
+    sessionTtlMs: 16 * 60 * 60 * 1000,
+    sessionTtlSeconds: 16 * 60 * 60,
+  };
+}
+
+function createCookieHeader(
+  config: AreaAccessRuntimeConfig,
+  areaId: "kitchen-1" | "kitchen-2" | "salon",
+) {
+  return `${config.cookieName}=${signAreaSession(
+    {
+      areaId,
+      expiresAt: "2026-05-13T16:00:00.000Z",
+      issuedAt: "2026-05-13T00:00:00.000Z",
+      version: 1,
+    },
+    config,
+  )}`;
 }
 
 describe("provider sync routes", () => {
@@ -472,6 +510,7 @@ describe("provider sync routes", () => {
     const context = createProductionTestContext({
       importProviderOrders: true,
     });
+    const config = createRuntimeConfig();
     const orderId = "order_anota-101";
     const exception = context.repository.openOrRefreshException({
       provider: "anota_ai",
@@ -490,14 +529,21 @@ describe("provider sync routes", () => {
 
     try {
       const response = await handlePostAcknowledgeSyncException(
-        createJsonRequest({
-          resolutionNote: "Atendimento ciente",
-        }),
+        createJsonRequest(
+          {
+            resolutionNote: "Atendimento ciente",
+          },
+          {
+            cookie: createCookieHeader(config, "salon"),
+          },
+        ),
         {
           exceptionId: exception.id,
           orderId,
         },
         {
+          config,
+          now: new Date("2026-05-13T12:00:00.000Z"),
           service,
         },
       );
@@ -528,6 +574,7 @@ describe("provider sync routes", () => {
     const context = createProductionTestContext({
       importProviderOrders: true,
     });
+    const config = createRuntimeConfig();
     const orderId = "order_anota-101";
     const exception = context.repository.openOrRefreshException({
       provider: "anota_ai",
@@ -545,23 +592,30 @@ describe("provider sync routes", () => {
     });
 
     try {
+      const requestHeaders = {
+        cookie: createCookieHeader(config, "salon"),
+      };
       const firstResponse = await handlePostAcknowledgeSyncException(
-        createJsonRequest(undefined),
+        createJsonRequest(undefined, requestHeaders),
         {
           exceptionId: exception.id,
           orderId,
         },
         {
+          config,
+          now: new Date("2026-05-13T12:00:00.000Z"),
           service,
         },
       );
       const secondResponse = await handlePostAcknowledgeSyncException(
-        createJsonRequest(undefined),
+        createJsonRequest(undefined, requestHeaders),
         {
           exceptionId: exception.id,
           orderId,
         },
         {
+          config,
+          now: new Date("2026-05-13T12:00:00.000Z"),
           service,
         },
       );
@@ -582,4 +636,108 @@ describe("provider sync routes", () => {
       context.close();
     }
   });
+
+  it("returns 403 for acknowledge attempts from a kitchen session before the sync service runs", async () => {
+    const context = createProductionTestContext({
+      importProviderOrders: true,
+    });
+    const config = createRuntimeConfig();
+    const orderId = "order_anota-101";
+    const exception = context.repository.openOrRefreshException({
+      provider: "anota_ai",
+      kind: "changed_externally",
+      orderId,
+      externalOrderId: "anota-101",
+      summary: "Mudança externa detectada",
+      details: {
+        diffs: [{ type: "quantity_changed" }],
+      },
+    });
+    const acknowledgeException = vi.fn(async () => {});
+    const service = {
+      acknowledgeException,
+    } as unknown as ProviderSyncService;
+
+    try {
+      const response = await handlePostAcknowledgeSyncException(
+        createJsonRequest(
+          {
+            resolutionNote: "Não deveria passar",
+          },
+          {
+            cookie: createCookieHeader(config, "kitchen-1"),
+          },
+        ),
+        {
+          exceptionId: exception.id,
+          orderId,
+        },
+        {
+          config,
+          now: new Date("2026-05-13T12:00:00.000Z"),
+          service,
+        },
+      );
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toBe("Forbidden");
+      expect(acknowledgeException).not.toHaveBeenCalled();
+      expect(
+        context.repository
+          .listSyncExceptionsForOrder(orderId)
+          .find((entry) => entry.id === exception.id)?.status,
+      ).toBe("open");
+    } finally {
+      context.close();
+    }
+  });
+
+  it.each([
+    {
+      cookieHeader: undefined,
+      label: "missing session",
+    },
+    {
+      cookieHeader: "bistro_area_session=invalid",
+      label: "invalid session",
+    },
+  ])(
+    "returns 401 for acknowledge attempts with a $label",
+    async ({ cookieHeader }) => {
+      const context = createProductionTestContext({
+        importProviderOrders: true,
+      });
+      const config = createRuntimeConfig();
+      const acknowledgeException = vi.fn(async () => {});
+      const service = {
+        acknowledgeException,
+      } as unknown as ProviderSyncService;
+
+      try {
+        const response = await handlePostAcknowledgeSyncException(
+          createJsonRequest(
+            {
+              resolutionNote: "Atendimento ciente",
+            },
+            cookieHeader ? { cookie: cookieHeader } : {},
+          ),
+          {
+            exceptionId: "exception-123",
+            orderId: "order_anota-101",
+          },
+          {
+            config,
+            now: new Date("2026-05-13T12:00:00.000Z"),
+            service,
+          },
+        );
+
+        expect(response.status).toBe(401);
+        expect(await response.json()).toBe("Unauthorized");
+        expect(acknowledgeException).not.toHaveBeenCalled();
+      } finally {
+        context.close();
+      }
+    },
+  );
 });
