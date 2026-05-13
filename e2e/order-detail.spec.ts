@@ -65,4 +65,21 @@ test.describe("order detail flows", () => {
     await itemCard.getByTestId("item-action-order_anota-105__105-1").click();
     await expect(itemCard).toContainText("Em preparo");
   });
+
+  test("canonicalizes a wrong-kitchen detail URL back to the authorized kitchen", async ({
+    page,
+  }) => {
+    await loginThroughAccess(page, {
+      areaId: "kitchen-1",
+      pin: "1111",
+    });
+
+    await page.goto("/orders/order_anota-101?kitchen=kitchen-2");
+
+    await expect(page).toHaveURL(
+      /\/orders\/order_anota-101\?kitchen=kitchen-1$/,
+    );
+    await expect(page.getByTestId("focus-kitchen-name")).toHaveText("Kitchen 1");
+    await expect(page.getByTestId("other-kitchen-name")).toHaveText("Kitchen 2");
+  });
 });

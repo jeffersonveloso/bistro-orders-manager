@@ -227,6 +227,7 @@ describe("protected server pages", () => {
         repository: context.repository,
       });
 
+      expect(result.activeKitchenId).toBe("kitchen-1");
       expect(result.initialData.kitchens).toHaveLength(2);
       expect(result.initialData.generatedAt).toEqual(expect.any(String));
       expect(refresh).toHaveBeenCalledTimes(1);
@@ -244,8 +245,14 @@ describe("protected server pages", () => {
       createCookieStore(createRuntimeConfig(), "kitchen-1"),
     );
 
-    const page = (await Home()) as { props: { initialData: { kitchens: unknown[] } } };
+    const page = (await Home()) as {
+      props: {
+        activeKitchenId: string;
+        initialData: { kitchens: unknown[] };
+      };
+    };
 
+    expect(page.props.activeKitchenId).toBe("kitchen-1");
     expect(page.props.initialData.kitchens).toHaveLength(2);
   });
 
@@ -281,7 +288,7 @@ describe("protected server pages", () => {
         repository: context.repository,
       });
 
-      expect(result.initialData.salonSummary.length).toBeGreaterThan(0);
+      expect(result.initialData.summary.length).toBeGreaterThan(0);
       expect(refresh).toHaveBeenCalledTimes(1);
     } finally {
       context.close();
@@ -296,10 +303,10 @@ describe("protected server pages", () => {
     cookiesMock.mockResolvedValue(createCookieStore(createRuntimeConfig(), "salon"));
 
     const page = (await SalonPage()) as {
-      props: { initialData: { salonSummary: unknown[] } };
+      props: { initialData: { summary: unknown[] } };
     };
 
-    expect(page.props.initialData.salonSummary.length).toBeGreaterThan(0);
+    expect(page.props.initialData.summary.length).toBeGreaterThan(0);
   });
 
   it("canonicalizes /orders/[orderId] to the authenticated kitchen before refresh runs", async () => {

@@ -2,10 +2,18 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCheck, TriangleAlert } from "lucide-react";
-import Link from "next/link";
 import { useState } from "react";
 
-import type { DashboardData } from "@/src/application/production-service";
+import type { SalonData } from "@/src/application/production-service";
+import {
+  getProtectedSurfaceFeedback,
+  getSalonInvalidationKeys,
+  getSalonQueryOptions,
+} from "@/src/components/kds/production-client-contracts";
+import {
+  ProtectedSurfaceBanner,
+  ProtectedSurfaceFallback,
+} from "@/src/components/kds/protected-surface-feedback";
 import { Button } from "@/src/components/ui/button";
 import { Card } from "@/src/components/ui/card";
 import { fetchJson } from "@/src/lib/fetch-json";
@@ -40,6 +48,13 @@ function getSalonStatusPresentation(orderStatus: string) {
         className:
           "border-[color-mix(in_oklab,var(--accent-ready)_48%,white)] bg-[color-mix(in_oklab,var(--accent-ready)_16%,white)] text-[var(--accent-ready)]",
       };
+    case "Cancelado":
+      return {
+        label: "Cancelado",
+        description: "Pedido cancelado no provedor e retirado do fluxo operacional.",
+        className:
+          "border-[var(--accent-hot)] bg-[color-mix(in_oklab,var(--accent-hot)_16%,white)] text-[var(--accent-hot)]",
+      };
     default:
       return {
         label: orderStatus,
@@ -50,16 +65,10 @@ function getSalonStatusPresentation(orderStatus: string) {
   }
 }
 
-export function SalonClient({ initialData }: { initialData?: DashboardData }) {
+export function SalonClient({ initialData }: { initialData?: SalonData }) {
   const queryClient = useQueryClient();
   const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
-  const boardQuery = useQuery({
-    queryKey: ["board", "salon"],
-    queryFn: () => fetchJson<DashboardData>("/api/board"),
-    initialData,
-    refetchInterval: 4_000,
-    refetchIntervalInBackground: true,
-  });
+  const salonQuery = useQuery(getSalonQueryOptions(initialData));
   const acknowledgeMutation = useMutation({
     mutationFn: async ({
       orderId,
@@ -80,14 +89,20 @@ export function SalonClient({ initialData }: { initialData?: DashboardData }) {
       );
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["board"] });
+      await Promise.all(
+        getSalonInvalidationKeys().map((queryKey) =>
+          queryClient.invalidateQueries({ queryKey }),
+        ),
+      );
     },
     onSettled: () => {
       setBusyOrderId(null);
     },
   });
+  const blockingAuthFeedback = getProtectedSurfaceFeedback(salonQuery.error);
+  const actionAuthFeedback = getProtectedSurfaceFeedback(acknowledgeMutation.error);
 
-  if (boardQuery.isLoading) {
+  if (salonQuery.isLoading) {
     return (
       <main className="flex min-h-screen items-center justify-center p-8">
         <Card className="p-8">Carregando salão...</Card>
@@ -95,20 +110,24 @@ export function SalonClient({ initialData }: { initialData?: DashboardData }) {
     );
   }
 
-  if (boardQuery.isError || !boardQuery.data) {
+  if (blockingAuthFeedback) {
+    return <ProtectedSurfaceFallback feedback={blockingAuthFeedback} />;
+  }
+
+  if (salonQuery.isError || !salonQuery.data) {
     return (
       <main className="flex min-h-screen items-center justify-center p-8">
         <Card className="space-y-4 p-8 text-center">
           <p className="font-mono text-sm uppercase tracking-[0.24em] text-[var(--accent-hot)]">
             Não foi possível carregar o salão
           </p>
-          <Button asChild variant="secondary">
-            <Link href="/">Voltar</Link>
-          </Button>
+          <Button onClick={() => salonQuery.refetch()}>Tentar novamente</Button>
         </Card>
       </main>
     );
   }
+
+  const salon = salonQuery.data;
 
   return (
     <main className="min-h-screen px-4 py-4 md:px-6 md:py-6">
@@ -122,13 +141,27 @@ export function SalonClient({ initialData }: { initialData?: DashboardData }) {
               Salão
             </h1>
           </div>
-          <Button asChild variant="secondary">
-            <Link href="/">Voltar ao sync board</Link>
-          </Button>
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="rounded-full border border-[var(--panel-border)] bg-[var(--panel)] px-4 py-2 font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
+              {salon.openSyncExceptions} exceção(ões) aberta(s)
+            </div>
+            <div className="rounded-full border border-[var(--panel-border)] bg-[var(--panel)] px-4 py-2 font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
+              Atualizado{" "}
+              {new Date(salon.generatedAt).toLocaleTimeString("pt-BR", {
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+              })}
+            </div>
+          </div>
         </header>
 
+        {actionAuthFeedback ? (
+          <ProtectedSurfaceBanner feedback={actionAuthFeedback} />
+        ) : null}
+
         <div className="grid gap-3">
-          {boardQuery.data.salonSummary.map((order) => {
+          {salon.summary.map((order) => {
             const status = getSalonStatusPresentation(order.orderStatus);
             const busy = busyOrderId === order.orderId;
 

@@ -12,16 +12,22 @@ import {
 import Link from "next/link";
 
 import type { OrderDetailData } from "@/src/application/production-service";
+import {
+  getDashboardInvalidationKeys,
+  getOrderDetailQueryOptions,
+  getProtectedSurfaceFeedback,
+} from "@/src/components/kds/production-client-contracts";
+import {
+  ProtectedSurfaceBanner,
+  ProtectedSurfaceFallback,
+} from "@/src/components/kds/protected-surface-feedback";
 import { StatusBadge } from "@/src/components/kds/status-badge";
 import { Button } from "@/src/components/ui/button";
 import { Card } from "@/src/components/ui/card";
 import { Separator } from "@/src/components/ui/separator";
+import { getCanonicalAreaPath, type KitchenAreaId } from "@/src/domain/area-access";
 import { fetchJson } from "@/src/lib/fetch-json";
-
-async function fetchOrder(orderId: string, kitchenId?: string) {
-  const query = kitchenId ? `?kitchen=${kitchenId}` : "";
-  return fetchJson<OrderDetailData>(`/api/orders/${orderId}${query}`);
-}
+import { cn } from "@/src/lib/utils";
 
 function formatSyncTime(value: string) {
   return new Date(value).toLocaleTimeString("pt-BR", {
@@ -30,24 +36,63 @@ function formatSyncTime(value: string) {
   });
 }
 
+function getItemStatusLabel(status: "new" | "in_preparation" | "ready") {
+  switch (status) {
+    case "new":
+      return "Novo";
+    case "ready":
+      return "Pronto";
+    default:
+      return "Em preparo";
+  }
+}
+
+function isCanceledTicketStatus(status: OrderDetailData["focusTicketStatus"]) {
+  return status === "canceled";
+}
+
+function ExternalItemStatusPill({
+  detail,
+  kind,
+  label,
+}: {
+  detail?: string | null;
+  kind: "canceled" | "changed";
+  label: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em]",
+        kind === "canceled"
+          ? "border-[color-mix(in_oklab,var(--accent-hot)_48%,white)] bg-[color-mix(in_oklab,var(--accent-hot)_14%,white)] text-[var(--accent-hot)]"
+          : "border-[color-mix(in_oklab,var(--accent-warm)_44%,white)] bg-[color-mix(in_oklab,var(--accent-warm)_12%,white)] text-[color-mix(in_oklab,var(--accent-warm)_82%,black)]",
+      )}
+      title={detail ?? undefined}
+    >
+      {label}
+    </div>
+  );
+}
+
 export function OrderDetailClient({
   orderId,
   kitchenId,
   initialData,
 }: {
   orderId: string;
-  kitchenId?: string;
+  kitchenId: KitchenAreaId;
   initialData?: OrderDetailData;
 }) {
   const queryClient = useQueryClient();
 
-  const orderQuery = useQuery({
-    queryKey: ["order", orderId, kitchenId],
-    queryFn: () => fetchOrder(orderId, kitchenId),
-    initialData,
-    refetchInterval: 2_500,
-    refetchIntervalInBackground: true,
-  });
+  const orderQuery = useQuery(
+    getOrderDetailQueryOptions({
+      initialData,
+      kitchenId,
+      orderId,
+    }),
+  );
 
   const ticketMutation = useMutation({
     mutationFn: async ({
@@ -55,18 +100,24 @@ export function OrderDetailClient({
       currentKitchenId,
     }: {
       action: "start" | "complete";
-      currentKitchenId: string;
+      currentKitchenId: KitchenAreaId;
     }) =>
       fetchJson(`/api/orders/${orderId}/tickets/${currentKitchenId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action }),
       }),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["board"] }),
-        queryClient.invalidateQueries({ queryKey: ["order", orderId] }),
-      ]);
+    onSuccess: async (_, variables) => {
+      const invalidationKeys = getDashboardInvalidationKeys(
+        orderId,
+        variables.currentKitchenId,
+      );
+
+      await Promise.all(
+        invalidationKeys.map((queryKey) =>
+          queryClient.invalidateQueries({ queryKey }),
+        ),
+      );
     },
   });
 
@@ -84,12 +135,19 @@ export function OrderDetailClient({
         body: JSON.stringify({ status }),
       }),
     onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["board"] }),
-        queryClient.invalidateQueries({ queryKey: ["order", orderId] }),
-      ]);
+      const invalidationKeys = getDashboardInvalidationKeys(orderId, kitchenId);
+
+      await Promise.all(
+        invalidationKeys.map((queryKey) =>
+          queryClient.invalidateQueries({ queryKey }),
+        ),
+      );
     },
   });
+  const blockingAuthFeedback = getProtectedSurfaceFeedback(orderQuery.error);
+  const actionAuthFeedback =
+    getProtectedSurfaceFeedback(ticketMutation.error) ??
+    getProtectedSurfaceFeedback(itemMutation.error);
 
   const data = orderQuery.data;
 
@@ -101,6 +159,10 @@ export function OrderDetailClient({
     );
   }
 
+  if (blockingAuthFeedback) {
+    return <ProtectedSurfaceFallback feedback={blockingAuthFeedback} />;
+  }
+
   if (orderQuery.isError || !data) {
     return (
       <main className="flex min-h-screen items-center justify-center p-8">
@@ -108,17 +170,23 @@ export function OrderDetailClient({
           <p className="font-mono text-sm uppercase tracking-[0.26em] text-[var(--accent-hot)]">
             Pedido indisponível
           </p>
-          <Button asChild variant="secondary">
-            <Link href="/">Voltar ao painel</Link>
-          </Button>
+          <Button onClick={() => orderQuery.refetch()}>Tentar novamente</Button>
         </Card>
       </main>
     );
   }
 
+  const focusActiveItems = data.focusItems.filter(
+    (item) => item.externalStatus?.kind !== "canceled",
+  );
   const focusTicketState = {
-    allReady: data.focusItems.every((item) => item.status === "ready"),
-    hasStarted: data.focusItems.some((item) => item.status !== "new"),
+    isCanceled: isCanceledTicketStatus(data.focusTicketStatus),
+    allReady:
+      focusActiveItems.length === 0 ||
+      focusActiveItems.every((item) => item.status === "ready"),
+    hasStarted:
+      focusActiveItems.some((item) => item.status !== "new") ||
+      data.focusItems.some((item) => item.externalStatus?.kind === "canceled"),
   };
 
   return (
@@ -127,7 +195,7 @@ export function OrderDetailClient({
         <header className="grid gap-4 rounded-[2.2rem] border border-[var(--panel-border)] bg-[linear-gradient(135deg,rgba(255,255,255,0.96),rgba(250,244,233,0.92))] p-6 shadow-[0_24px_70px_rgba(34,30,25,0.1)] lg:grid-cols-[1.1fr_0.9fr]">
           <div className="space-y-4">
             <Button asChild size="sm" variant="ghost">
-              <Link href="/">
+              <Link href={getCanonicalAreaPath(kitchenId)}>
                 <ArrowLeft className="size-4" />
                 Voltar ao painel
               </Link>
@@ -162,7 +230,7 @@ export function OrderDetailClient({
               </h2>
             </div>
             <div className="flex flex-wrap items-start justify-end gap-2">
-              {!focusTicketState.hasStarted && (
+              {!focusTicketState.isCanceled && !focusTicketState.hasStarted && (
                 <Button
                   data-testid={`start-kitchen-${data.focusKitchenId}`}
                   onClick={() =>
@@ -178,7 +246,7 @@ export function OrderDetailClient({
                   Iniciar cozinha
                 </Button>
               )}
-              {!focusTicketState.allReady && (
+              {!focusTicketState.isCanceled && !focusTicketState.allReady && (
                 <Button
                   data-testid={`complete-kitchen-${data.focusKitchenId}`}
                   onClick={() =>
@@ -193,9 +261,18 @@ export function OrderDetailClient({
                   Concluir cozinha
                 </Button>
               )}
+              {focusTicketState.isCanceled ? (
+                <div className="rounded-full border border-[color-mix(in_oklab,var(--accent-hot)_48%,white)] bg-[color-mix(in_oklab,var(--accent-hot)_14%,white)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-[var(--accent-hot)]">
+                  Produção bloqueada
+                </div>
+              ) : null}
             </div>
           </Card>
         </header>
+
+        {actionAuthFeedback ? (
+          <ProtectedSurfaceBanner feedback={actionAuthFeedback} />
+        ) : null}
 
         {data.syncException ? (
           <Card
@@ -254,70 +331,105 @@ export function OrderDetailClient({
 
             <div className="space-y-3">
               {data.focusItems.map((item) => (
-                <Card
-                  className="rounded-[1.6rem] border-[var(--panel-border)] bg-[rgba(255,255,255,0.92)] p-4"
-                  data-testid={`focus-item-${item.id}`}
-                  key={item.id}
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="space-y-1">
-                      <p className="font-display text-3xl uppercase tracking-[0.08em] text-[var(--ink-strong)]">
-                        {item.name}
-                      </p>
-                      <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
-                        Quantidade {item.quantity}
-                      </p>
-                      {item.notes ? (
-                        <p className="text-sm text-[var(--ink-soft)]">{item.notes}</p>
-                      ) : null}
-                    </div>
+                (() => {
+                  const isCanceled = item.externalStatus?.kind === "canceled";
 
-                    <div className="flex flex-wrap items-center gap-2">
-                      <StatusBadge
-                        label={
-                          item.status === "new"
-                            ? "Novo"
-                            : item.status === "ready"
-                              ? "Pronto"
-                              : "Em preparo"
-                        }
-                        status={item.status}
-                      />
-                      {item.status === "new" ? (
-                        <Button
-                          data-testid={`item-action-${item.id}`}
-                          onClick={() =>
-                            itemMutation.mutate({
-                              itemId: item.id,
-                              status: "in_preparation",
-                            })
-                          }
-                          size="sm"
-                          variant="secondary"
-                        >
-                          Iniciar
-                        </Button>
-                      ) : item.status === "in_preparation" ? (
-                        <Button
-                          data-testid={`item-action-${item.id}`}
-                          onClick={() =>
-                            itemMutation.mutate({
-                              itemId: item.id,
-                              status: "ready",
-                            })
-                          }
-                          size="sm"
-                        >
-                          Marcar pronto
-                        </Button>
-                      ) : (
-                        <Button disabled size="sm" variant="ghost">
-                          Finalizado
-                        </Button>
+                  return (
+                    <Card
+                      className={cn(
+                        "rounded-[1.6rem] border-[var(--panel-border)] bg-[rgba(255,255,255,0.92)] p-4",
+                        isCanceled &&
+                          "border-[color-mix(in_oklab,var(--accent-hot)_42%,white)] bg-[color-mix(in_oklab,var(--accent-hot)_7%,white)]",
                       )}
-                    </div>
-                  </div>
-                </Card>
+                      data-testid={`focus-item-${item.id}`}
+                      key={item.id}
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="space-y-1">
+                          <p
+                            className={cn(
+                              "font-display text-3xl uppercase tracking-[0.08em] text-[var(--ink-strong)]",
+                              isCanceled &&
+                                "text-[var(--accent-hot)] line-through decoration-2",
+                            )}
+                          >
+                            {item.name}
+                          </p>
+                          <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
+                            Quantidade {item.quantity}
+                          </p>
+                          {item.notes ? (
+                            <p className="text-sm text-[var(--ink-soft)]">{item.notes}</p>
+                          ) : null}
+                          {item.externalStatus?.detail ? (
+                            <p
+                              className={cn(
+                                "text-sm",
+                                isCanceled
+                                  ? "text-[var(--accent-hot)]"
+                                  : "text-[color-mix(in_oklab,var(--accent-warm)_82%,black)]",
+                              )}
+                            >
+                              {item.externalStatus.detail}
+                            </p>
+                          ) : null}
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          {item.externalStatus ? (
+                            <ExternalItemStatusPill
+                              detail={item.externalStatus.detail}
+                              kind={item.externalStatus.kind}
+                              label={item.externalStatus.label}
+                            />
+                          ) : null}
+                          {!isCanceled ? (
+                            <StatusBadge
+                              label={getItemStatusLabel(item.status)}
+                              status={item.status}
+                            />
+                          ) : null}
+                          {isCanceled ? (
+                            <Button disabled size="sm" variant="ghost">
+                              Sem ação
+                            </Button>
+                          ) : item.status === "new" ? (
+                            <Button
+                              data-testid={`item-action-${item.id}`}
+                              onClick={() =>
+                                itemMutation.mutate({
+                                  itemId: item.id,
+                                  status: "in_preparation",
+                                })
+                              }
+                              size="sm"
+                              variant="secondary"
+                            >
+                              Iniciar
+                            </Button>
+                          ) : item.status === "in_preparation" ? (
+                            <Button
+                              data-testid={`item-action-${item.id}`}
+                              onClick={() =>
+                                itemMutation.mutate({
+                                  itemId: item.id,
+                                  status: "ready",
+                                })
+                              }
+                              size="sm"
+                            >
+                              Marcar pronto
+                            </Button>
+                          ) : (
+                            <Button disabled size="sm" variant="ghost">
+                              Finalizado
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    </Card>
+                  );
+                })()
               ))}
             </div>
           </Card>
@@ -349,35 +461,70 @@ export function OrderDetailClient({
             {data.otherKitchen ? (
               <div className="space-y-3">
                 {data.otherKitchen.items.map((item) => (
-                  <div
-                    className="rounded-[1.5rem] border border-white/10 bg-white/6 px-4 py-3"
-                    key={item.id}
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-base font-semibold">{item.name}</p>
-                        <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-white/55">
-                          Quantidade {item.quantity}
-                        </p>
+                  (() => {
+                    const isCanceled = item.externalStatus?.kind === "canceled";
+
+                    return (
+                      <div
+                        className={cn(
+                          "rounded-[1.5rem] border border-white/10 bg-white/6 px-4 py-3",
+                          isCanceled &&
+                            "border-[color-mix(in_oklab,var(--accent-hot)_42%,white)] bg-[color-mix(in_oklab,var(--accent-hot)_14%,transparent)]",
+                        )}
+                        key={item.id}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <p
+                              className={cn(
+                                "text-base font-semibold",
+                                isCanceled &&
+                                  "text-[color-mix(in_oklab,var(--accent-hot)_80%,white)] line-through decoration-2",
+                              )}
+                            >
+                              {item.name}
+                            </p>
+                            <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-white/55">
+                              Quantidade {item.quantity}
+                            </p>
+                            {item.externalStatus?.detail ? (
+                              <p
+                                className={cn(
+                                  "mt-2 text-sm",
+                                  isCanceled
+                                    ? "text-[color-mix(in_oklab,var(--accent-hot)_78%,white)]"
+                                    : "text-[color-mix(in_oklab,var(--accent-warm)_60%,white)]",
+                                )}
+                              >
+                                {item.externalStatus.detail}
+                              </p>
+                            ) : null}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            {item.externalStatus ? (
+                              <ExternalItemStatusPill
+                                detail={item.externalStatus.detail}
+                                kind={item.externalStatus.kind}
+                                label={item.externalStatus.label}
+                              />
+                            ) : null}
+                            {!isCanceled ? (
+                              <StatusBadge
+                                label={getItemStatusLabel(item.status)}
+                                status={item.status}
+                              />
+                            ) : null}
+                          </div>
+                        </div>
+                        {item.notes ? (
+                          <>
+                            <Separator className="my-3 bg-white/10" />
+                            <p className="text-sm text-white/70">{item.notes}</p>
+                          </>
+                        ) : null}
                       </div>
-                      <StatusBadge
-                        label={
-                          item.status === "new"
-                            ? "Novo"
-                            : item.status === "ready"
-                              ? "Pronto"
-                              : "Em preparo"
-                        }
-                        status={item.status}
-                      />
-                    </div>
-                    {item.notes ? (
-                      <>
-                        <Separator className="my-3 bg-white/10" />
-                        <p className="text-sm text-white/70">{item.notes}</p>
-                      </>
-                    ) : null}
-                  </div>
+                    );
+                  })()
                 ))}
               </div>
             ) : (

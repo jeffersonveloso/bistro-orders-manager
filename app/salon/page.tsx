@@ -1,6 +1,6 @@
 import { requireSalonPageAccess, type AreaPageDependencies } from "@/app/_lib/area-access-page";
 import type { ProductionRepository } from "@/src/application/ports";
-import { getDashboardData } from "@/src/application/production-service";
+import { getSalonData } from "@/src/application/production-service";
 import { SalonClient } from "@/src/components/kds/salon-client";
 import { maybeRefreshRuntimeProviderSync } from "@/src/infrastructure/runtime-provider-sync-refresh";
 import { getProductionRepository } from "@/src/infrastructure/sqlite";
@@ -19,7 +19,7 @@ export async function loadSalonPage(
   await runReadRefresh(dependencies);
 
   return {
-    initialData: getDashboardData(
+    initialData: getSalonData(
       dependencies.repository ?? getProductionRepository(),
     ),
   };

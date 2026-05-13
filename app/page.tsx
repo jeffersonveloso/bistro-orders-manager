@@ -13,10 +13,11 @@ export interface HomePageDependencies extends AreaPageDependencies {
 }
 
 export async function loadHomePage(dependencies: HomePageDependencies = {}) {
-  await requireKitchenPageAccess(dependencies);
+  const { kitchenId } = await requireKitchenPageAccess(dependencies);
   await runReadRefresh(dependencies);
 
   return {
+    activeKitchenId: kitchenId,
     initialData: getDashboardData(
       dependencies.repository ?? getProductionRepository(),
     ),
@@ -24,10 +25,10 @@ export async function loadHomePage(dependencies: HomePageDependencies = {}) {
 }
 
 export default async function Home() {
-  const { initialData } = await loadHomePage();
+  const { activeKitchenId, initialData } = await loadHomePage();
 
   return (
-    <DashboardClient initialData={initialData} />
+    <DashboardClient activeKitchenId={activeKitchenId} initialData={initialData} />
   );
 }
 

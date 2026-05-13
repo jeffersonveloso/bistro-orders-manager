@@ -15,34 +15,74 @@ import { startTransition, useState } from "react";
 import type { ComponentType } from "react";
 
 import type { DashboardData } from "@/src/application/production-service";
+import {
+  canManageKitchen,
+  getBoardQueryOptions,
+  getDashboardInvalidationKeys,
+  getProtectedSurfaceFeedback,
+  hasAuthorizedOrderAccess,
+  prioritizeKitchens,
+} from "@/src/components/kds/production-client-contracts";
+import {
+  ProtectedSurfaceBanner,
+  ProtectedSurfaceFallback,
+} from "@/src/components/kds/protected-surface-feedback";
 import { StatusBadge } from "@/src/components/kds/status-badge";
 import { Button } from "@/src/components/ui/button";
 import { Card } from "@/src/components/ui/card";
 import { ScrollArea } from "@/src/components/ui/scroll-area";
 import { Separator } from "@/src/components/ui/separator";
+import type { KitchenAreaId } from "@/src/domain/area-access";
 import { fetchJson } from "@/src/lib/fetch-json";
 import { cn } from "@/src/lib/utils";
 
-async function fetchBoard() {
-  return fetchJson<DashboardData>("/api/board");
+function getItemStatusLabel(status: "new" | "in_preparation" | "ready") {
+  switch (status) {
+    case "new":
+      return "Novo";
+    case "ready":
+      return "Pronto";
+    default:
+      return "Em preparo";
+  }
+}
+
+function ExternalItemStatusPill({
+  detail,
+  kind,
+  label,
+}: {
+  detail?: string | null;
+  kind: "canceled" | "changed";
+  label: string;
+}) {
+  return (
+    <span
+      className={cn(
+        "rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]",
+        kind === "canceled"
+          ? "border-[color-mix(in_oklab,var(--accent-hot)_48%,white)] bg-[color-mix(in_oklab,var(--accent-hot)_14%,white)] text-[var(--accent-hot)]"
+          : "border-[color-mix(in_oklab,var(--accent-warm)_42%,white)] bg-[color-mix(in_oklab,var(--accent-warm)_12%,white)] text-[color-mix(in_oklab,var(--accent-warm)_82%,black)]",
+      )}
+      title={detail ?? undefined}
+    >
+      {label}
+    </span>
+  );
 }
 
 export function DashboardClient({
+  activeKitchenId,
   initialData,
 }: {
+  activeKitchenId: KitchenAreaId;
   initialData?: DashboardData;
 }) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [busyTicketId, setBusyTicketId] = useState<string | null>(null);
 
-  const boardQuery = useQuery({
-    queryKey: ["board"],
-    queryFn: fetchBoard,
-    initialData,
-    refetchInterval: 4_000,
-    refetchIntervalInBackground: true,
-  });
+  const boardQuery = useQuery(getBoardQueryOptions(initialData));
 
   const ticketMutation = useMutation({
     mutationFn: async ({
@@ -51,7 +91,7 @@ export function DashboardClient({
       action,
     }: {
       orderId: string;
-      kitchenId: string;
+      kitchenId: KitchenAreaId;
       action: "start" | "complete";
     }) => {
       setBusyTicketId(`${orderId}:${kitchenId}`);
@@ -62,16 +102,24 @@ export function DashboardClient({
         body: JSON.stringify({ action }),
       });
     },
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["board"] }),
-        queryClient.invalidateQueries({ queryKey: ["order"] }),
-      ]);
+    onSuccess: async (_, variables) => {
+      const invalidationKeys = getDashboardInvalidationKeys(
+        variables.orderId,
+        variables.kitchenId,
+      );
+
+      await Promise.all(
+        invalidationKeys.map((queryKey) =>
+          queryClient.invalidateQueries({ queryKey }),
+        ),
+      );
     },
     onSettled: () => {
       setBusyTicketId(null);
     },
   });
+  const blockingAuthFeedback = getProtectedSurfaceFeedback(boardQuery.error);
+  const actionAuthFeedback = getProtectedSurfaceFeedback(ticketMutation.error);
 
   if (boardQuery.isLoading) {
     return (
@@ -83,6 +131,10 @@ export function DashboardClient({
         </Card>
       </main>
     );
+  }
+
+  if (blockingAuthFeedback) {
+    return <ProtectedSurfaceFallback feedback={blockingAuthFeedback} />;
   }
 
   if (boardQuery.isError || !boardQuery.data) {
@@ -99,10 +151,13 @@ export function DashboardClient({
   }
 
   const board = boardQuery.data;
+  const prioritizedKitchens = prioritizeKitchens(board.kitchens, activeKitchenId);
+  const activeKitchen =
+    board.kitchens.find((kitchen) => kitchen.id === activeKitchenId) ?? null;
 
-  function openTicket(orderId: string, kitchenId: string) {
+  function openTicket(orderId: string) {
     startTransition(() => {
-      router.push(`/orders/${orderId}?kitchen=${kitchenId}`);
+      router.push(`/orders/${orderId}?kitchen=${activeKitchenId}`);
     });
   }
 
@@ -117,6 +172,9 @@ export function DashboardClient({
               </span>
               <span className="font-mono text-xs uppercase tracking-[0.28em] text-[var(--ink-muted)]">
                 Produção sincronizada
+              </span>
+              <span className="rounded-full border border-[var(--panel-border)] bg-white/70 px-3 py-1 font-mono text-xs uppercase tracking-[0.22em] text-[var(--ink-soft)]">
+                Área ativa {activeKitchen?.name ?? activeKitchenId}
               </span>
             </div>
             <div className="space-y-2">
@@ -171,14 +229,12 @@ export function DashboardClient({
               />
               Atualizar
             </Button>
-            <Button asChild data-testid="open-salon-view" variant="secondary">
-              <Link href="/salon">
-                Visão do salão
-                <ArrowUpRight className="size-4" />
-              </Link>
-            </Button>
           </div>
         </div>
+
+        {actionAuthFeedback ? (
+          <ProtectedSurfaceBanner feedback={actionAuthFeedback} />
+        ) : null}
 
         {board.openSyncExceptions > 0 ? (
           <Card
@@ -230,6 +286,20 @@ export function DashboardClient({
                       {alert.detail}
                     </p>
                   ) : null}
+                  {hasAuthorizedOrderAccess(
+                    board,
+                    activeKitchenId,
+                    alert.orderId,
+                  ) ? (
+                    <div className="mt-4">
+                      <Button asChild size="sm" variant="secondary">
+                        <Link href={`/orders/${alert.orderId}?kitchen=${activeKitchenId}`}>
+                          Abrir pedido afetado
+                          <ArrowUpRight className="size-4" />
+                        </Link>
+                      </Button>
+                    </div>
+                  ) : null}
                 </div>
               ))}
             </div>
@@ -237,9 +307,16 @@ export function DashboardClient({
         ) : null}
 
         <section className="grid gap-5 xl:grid-cols-2">
-          {board.kitchens.map((kitchen) => (
+          {prioritizedKitchens.map((kitchen) => {
+            const isActionKitchen = canManageKitchen(activeKitchenId, kitchen.id);
+
+            return (
             <Card
-              className="overflow-hidden border-[var(--panel-border-strong)] bg-[linear-gradient(180deg,rgba(255,255,255,0.92),rgba(249,244,235,0.98))]"
+              className={cn(
+                "overflow-hidden border-[var(--panel-border-strong)] bg-[linear-gradient(180deg,rgba(255,255,255,0.92),rgba(249,244,235,0.98))]",
+                isActionKitchen &&
+                  "shadow-[0_20px_60px_rgba(34,30,25,0.12)] ring-1 ring-[color-mix(in_oklab,var(--accent-hot)_28%,transparent)]",
+              )}
               key={kitchen.id}
             >
               <div className="flex items-end justify-between gap-4 border-b border-[var(--panel-border)] px-5 py-5">
@@ -251,9 +328,19 @@ export function DashboardClient({
                     {kitchen.name}
                   </h2>
                 </div>
+                <span
+                  className={cn(
+                    "rounded-full border px-3 py-1 font-mono text-[11px] uppercase tracking-[0.2em]",
+                    isActionKitchen
+                      ? "border-[var(--panel-border-strong)] bg-[var(--accent-hot)]/12 text-[var(--accent-hot)]"
+                      : "border-[var(--panel-border)] bg-[var(--panel)] text-[var(--ink-muted)]",
+                  )}
+                >
+                  {isActionKitchen ? "Sua operação" : "Somente leitura"}
+                </span>
               </div>
 
-              <div className="grid gap-4 p-4 md:grid-cols-3">
+              <div className="grid gap-4 p-4 md:grid-cols-2 2xl:grid-cols-4">
                 {kitchen.columns.map((column) => (
                   <div className="flex min-h-[560px] flex-col gap-3" key={column.status}>
                     <div className="flex items-center justify-between rounded-[1.4rem] border border-[var(--panel-border)] bg-[var(--panel-elevated)] px-4 py-3">
@@ -283,21 +370,33 @@ export function DashboardClient({
                                 className="w-full"
                                 data-testid={`ticket-card-${ticket.ticketId}`}
                                 key={ticket.ticketId}
-                                onClick={() =>
-                                  openTicket(ticket.orderId, ticket.kitchenId)
+                                onClick={
+                                  isActionKitchen
+                                    ? () => openTicket(ticket.orderId)
+                                    : undefined
                                 }
-                                onKeyDown={(event) => {
-                                  if (event.key === "Enter" || event.key === " ") {
-                                    event.preventDefault();
-                                    openTicket(ticket.orderId, ticket.kitchenId);
-                                  }
-                                }}
-                                role="button"
-                                tabIndex={0}
+                                onKeyDown={
+                                  isActionKitchen
+                                    ? (event) => {
+                                        if (
+                                          event.key === "Enter" ||
+                                          event.key === " "
+                                        ) {
+                                          event.preventDefault();
+                                          openTicket(ticket.orderId);
+                                        }
+                                      }
+                                    : undefined
+                                }
+                                role={isActionKitchen ? "button" : undefined}
+                                tabIndex={isActionKitchen ? 0 : undefined}
                               >
                                 <Card
                                   className={cn(
-                                    "space-y-4 rounded-[1.6rem] border-[var(--panel-border)] bg-[rgba(255,255,255,0.9)] p-4 transition hover:-translate-y-0.5 hover:border-[var(--panel-border-strong)] focus-within:border-[var(--panel-border-strong)]",
+                                    "space-y-4 rounded-[1.6rem] border-[var(--panel-border)] bg-[rgba(255,255,255,0.9)] p-4 transition",
+                                    isActionKitchen &&
+                                      "hover:-translate-y-0.5 hover:border-[var(--panel-border-strong)] focus-within:border-[var(--panel-border-strong)]",
+                                    isActionKitchen ? "cursor-pointer" : "cursor-default",
                                     ticket.hasOpenSyncException &&
                                       "border-[color-mix(in_oklab,var(--accent-warm)_52%,white)] bg-[color-mix(in_oklab,var(--accent-warm)_7%,white)]",
                                   )}
@@ -344,29 +443,63 @@ export function DashboardClient({
 
                                   <div className="space-y-2">
                                     {ticket.currentItems.map((item) => (
-                                      <div
-                                        className="flex items-center justify-between gap-3 rounded-2xl border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2"
-                                        key={item.id}
-                                      >
-                                        <div>
-                                          <p className="text-sm font-semibold text-[var(--ink-strong)]">
-                                            {item.name}
-                                          </p>
-                                          <p className="font-mono text-xs uppercase tracking-[0.18em] text-[var(--ink-muted)]">
-                                            Qtde {item.quantity}
-                                          </p>
-                                        </div>
-                                        <StatusBadge
-                                          label={
-                                            item.status === "new"
-                                              ? "Novo"
-                                              : item.status === "ready"
-                                                ? "Pronto"
-                                                : "Em preparo"
-                                          }
-                                          status={item.status}
-                                        />
-                                      </div>
+                                      (() => {
+                                        const isCanceled =
+                                          item.externalStatus?.kind === "canceled";
+
+                                        return (
+                                          <div
+                                            className={cn(
+                                              "flex items-center justify-between gap-3 rounded-2xl border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2",
+                                              isCanceled &&
+                                                "border-[color-mix(in_oklab,var(--accent-hot)_42%,white)] bg-[color-mix(in_oklab,var(--accent-hot)_8%,white)]",
+                                            )}
+                                            key={item.id}
+                                          >
+                                            <div>
+                                              <p
+                                                className={cn(
+                                                  "text-sm font-semibold text-[var(--ink-strong)]",
+                                                  isCanceled &&
+                                                    "text-[var(--accent-hot)] line-through decoration-2",
+                                                )}
+                                              >
+                                                {item.name}
+                                              </p>
+                                              <p className="font-mono text-xs uppercase tracking-[0.18em] text-[var(--ink-muted)]">
+                                                Qtde {item.quantity}
+                                              </p>
+                                              {item.externalStatus?.detail ? (
+                                                <p
+                                                  className={cn(
+                                                    "mt-1 text-xs",
+                                                    isCanceled
+                                                      ? "text-[var(--accent-hot)]"
+                                                      : "text-[color-mix(in_oklab,var(--accent-warm)_82%,black)]",
+                                                  )}
+                                                >
+                                                  {item.externalStatus.detail}
+                                                </p>
+                                              ) : null}
+                                            </div>
+                                            <div className="flex flex-wrap items-center justify-end gap-2">
+                                              {item.externalStatus ? (
+                                                <ExternalItemStatusPill
+                                                  detail={item.externalStatus.detail}
+                                                  kind={item.externalStatus.kind}
+                                                  label={item.externalStatus.label}
+                                                />
+                                              ) : null}
+                                              {!isCanceled ? (
+                                                <StatusBadge
+                                                  label={getItemStatusLabel(item.status)}
+                                                  status={item.status}
+                                                />
+                                              ) : null}
+                                            </div>
+                                          </div>
+                                        );
+                                      })()
                                     ))}
                                   </div>
 
@@ -399,7 +532,15 @@ export function DashboardClient({
                                       className="flex flex-wrap gap-2"
                                       onClick={(event) => event.stopPropagation()}
                                     >
-                                      {ticket.ticketStatus !== "ready" ? (
+                                      {ticket.ticketStatus === "canceled" ? (
+                                        <div className="rounded-full border border-[color-mix(in_oklab,var(--accent-hot)_48%,white)] bg-[color-mix(in_oklab,var(--accent-hot)_14%,white)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-[var(--accent-hot)]">
+                                          Cancelado no provedor
+                                        </div>
+                                      ) : !isActionKitchen ? (
+                                        <div className="rounded-full border border-[var(--panel-border)] bg-[var(--panel)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-[var(--ink-muted)]">
+                                          Acompanhar sem ação
+                                        </div>
+                                      ) : ticket.ticketStatus !== "ready" ? (
                                         <>
                                           <Button
                                             data-testid={`ticket-action-${ticket.ticketId}`}
@@ -440,7 +581,8 @@ export function DashboardClient({
                 ))}
               </div>
             </Card>
-          ))}
+            );
+          })}
         </section>
       </div>
     </main>
