@@ -6,6 +6,7 @@ import {
   deriveOrderStatus,
   deriveTicketStatus,
   type ItemStatus,
+  type OrderAggregate,
   type OrderStatus,
   isKitchenId,
   type KitchenId,
@@ -22,6 +23,7 @@ import type {
 type ProductionReadRepository = ProductionRepository &
   Pick<
     ProviderSyncRepository,
+    | "getProviderOrder"
     | "getUnresolvedSyncExceptionForOrder"
     | "listSyncExceptionsForOrder"
     | "listUnresolvedSyncExceptions"
@@ -74,6 +76,21 @@ export interface SyncAlert {
   lastSeenAt: string;
 }
 
+export interface ExternalItemStatusPresentation {
+  kind: "canceled" | "changed";
+  label: string;
+  detail: string | null;
+}
+
+export interface OrderItemPresentation {
+  id: string;
+  name: string;
+  quantity: number;
+  notes: string | null;
+  status: ItemStatus;
+  externalStatus: ExternalItemStatusPresentation | null;
+}
+
 const SYNC_EXCEPTION_LABELS: Record<SyncExceptionKind, string> = {
   missing_mapping: "Item sem mapeamento",
   changed_externally: "Mudança externa",
@@ -110,12 +127,7 @@ export interface BoardTicketCard {
   orderStatus: keyof typeof ORDER_STATUS_LABELS;
   orderStatusLabel: string;
   ageLabel: string;
-  currentItems: Array<{
-    id: string;
-    name: string;
-    quantity: number;
-    status: ItemStatus;
-  }>;
+  currentItems: OrderItemPresentation[];
   otherKitchenStatus: string | null;
   otherKitchenName: string | null;
   hasOpenSyncException: boolean;
@@ -123,37 +135,52 @@ export interface BoardTicketCard {
   syncExceptionStatusLabel: string | null;
 }
 
-export interface DashboardData {
-  kitchens: Array<{
-    id: KitchenId;
-    name: string;
-    description: string;
-    columns: Array<{
-      status: "new" | "in_preparation" | "ready";
-      label: string;
-      tickets: BoardTicketCard[];
-    }>;
+export interface BoardKitchenColumn {
+  status: "new" | "in_preparation" | "ready" | "canceled";
+  label: string;
+  tickets: BoardTicketCard[];
+}
+
+export interface BoardKitchenData {
+  id: KitchenId;
+  name: string;
+  description: string;
+  columns: BoardKitchenColumn[];
+}
+
+export interface SalonSummaryOrder {
+  orderId: string;
+  reference: string;
+  customerName: string | null;
+  orderStatus: string;
+  hasOpenSyncException: boolean;
+  syncExceptionLabel: string | null;
+  syncException: SyncExceptionPresentation | null;
+  ticketBreakdown: Array<{
+    kitchenName: string;
+    statusLabel: string;
   }>;
+}
+
+export interface DashboardMetrics {
+  activeOrders: number;
+  partiallyReadyOrders: number;
+  readyToServeOrders: number;
+}
+
+export interface DashboardData {
+  kitchens: BoardKitchenData[];
   openSyncExceptions: number;
   syncAlerts: SyncAlert[];
-  salonSummary: Array<{
-    orderId: string;
-    reference: string;
-    customerName: string | null;
-    orderStatus: string;
-    hasOpenSyncException: boolean;
-    syncExceptionLabel: string | null;
-    syncException: SyncExceptionPresentation | null;
-    ticketBreakdown: Array<{
-      kitchenName: string;
-      statusLabel: string;
-    }>;
-  }>;
-  metrics: {
-    activeOrders: number;
-    partiallyReadyOrders: number;
-    readyToServeOrders: number;
-  };
+  salonSummary: SalonSummaryOrder[];
+  metrics: DashboardMetrics;
+  generatedAt: string;
+}
+
+export interface SalonData {
+  summary: SalonSummaryOrder[];
+  metrics: DashboardMetrics;
+  openSyncExceptions: number;
   generatedAt: string;
 }
 
@@ -167,25 +194,13 @@ export interface OrderDetailData {
   focusKitchenStatus: string;
   orderStatusKey: OrderStatus;
   orderStatus: string;
-  focusItems: Array<{
-    id: string;
-    name: string;
-    quantity: number;
-    notes: string | null;
-    status: ItemStatus;
-  }>;
+  focusItems: OrderItemPresentation[];
   otherKitchen: {
     id: KitchenId;
     name: string;
     statusKey: TicketStatus;
     status: string;
-    items: Array<{
-      id: string;
-      name: string;
-      quantity: number;
-      notes: string | null;
-      status: ItemStatus;
-    }>;
+    items: OrderItemPresentation[];
   } | null;
   syncException: SyncExceptionPresentation | null;
   syncTrail: SyncTrailEntry[];
@@ -208,11 +223,22 @@ function hasSyncReadSupport(
   repository: ProductionRepository,
 ): repository is ProductionReadRepository {
   return (
+    "getProviderOrder" in repository &&
     "listUnresolvedSyncExceptions" in repository &&
     "listUnresolvedSyncExceptionsByOrderIds" in repository &&
     "getUnresolvedSyncExceptionForOrder" in repository &&
     "listSyncExceptionsForOrder" in repository
   );
+}
+
+interface ProductionReadContext {
+  repository: ProductionRepository;
+  kitchens: ReturnType<ProductionRepository["listKitchens"]>;
+  aggregates: OrderAggregate[];
+  syncRepository: ProductionReadRepository | null;
+  unresolvedExceptions: SyncExceptionRecord[];
+  aggregateByOrderId: Map<string, OrderAggregate>;
+  latestExceptionByOrderId: Map<string, SyncExceptionRecord>;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -227,6 +253,20 @@ function asString(value: unknown) {
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
     : null;
+}
+
+function asNumber(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number(value);
+
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
 }
 
 function normalizeSyncSummary(value: string) {
@@ -395,10 +435,279 @@ function buildSyncTrail(exceptions: SyncExceptionRecord[]) {
     .sort((left, right) => right.occurredAt.localeCompare(left.occurredAt));
 }
 
-export function getDashboardData(repository: ProductionRepository): DashboardData {
+function buildItemExternalStatuses(
+  exception: SyncExceptionRecord | undefined,
+  aggregate: OrderAggregate,
+) {
+  const statuses = new Map<string, ExternalItemStatusPresentation>();
+
+  if (!exception) {
+    return statuses;
+  }
+
+  if (exception.kind === "canceled_externally") {
+    for (const item of aggregate.items) {
+      statuses.set(item.id, {
+        kind: "canceled",
+        label: "Cancelado",
+        detail: "Pedido cancelado no provedor.",
+      });
+    }
+
+    return statuses;
+  }
+
+  if (exception.kind !== "changed_externally") {
+    return statuses;
+  }
+
+  const details = asRecord(exception.details);
+  const diffs = Array.isArray(details?.diffs) ? details.diffs : [];
+
+  for (const rawDiff of diffs) {
+    const diff = asRecord(rawDiff);
+
+    if (!diff) {
+      continue;
+    }
+
+    const type = asString(diff?.type);
+    const matchingItems = resolveAggregateItemsForDiff(aggregate, diff);
+
+    if (!type || matchingItems.length === 0) {
+      continue;
+    }
+
+    const nextStatus = toExternalItemStatusPresentation(type, diff);
+
+    if (!nextStatus) {
+      continue;
+    }
+
+    for (const item of matchingItems) {
+      const existingStatus = statuses.get(item.id);
+
+      if (existingStatus?.kind === "canceled" && nextStatus.kind !== "canceled") {
+        continue;
+      }
+
+      statuses.set(item.id, nextStatus);
+    }
+  }
+
+  return statuses;
+}
+
+function resolveAggregateItemsForDiff(
+  aggregate: OrderAggregate,
+  diff: Record<string, unknown>,
+) {
+  const externalItemId = asString(diff.externalItemId);
+
+  if (externalItemId) {
+    const exactExternalIdMatches = aggregate.items.filter(
+      (item) => item.externalItemId === externalItemId,
+    );
+
+    if (exactExternalIdMatches.length === 1) {
+      return exactExternalIdMatches;
+    }
+  }
+
+  const before = asRecord(diff.before);
+  const after = asRecord(diff.after);
+  const menuItemId =
+    asString(before?.menuItemId) ??
+    asString(after?.menuItemId);
+  const itemName =
+    asString(before?.name) ??
+    asString(after?.name);
+  const itemNotes =
+    asString(before?.notes) ??
+    asString(after?.notes);
+
+  if (!menuItemId && !itemName) {
+    return [];
+  }
+
+  let matches = aggregate.items;
+
+  if (menuItemId) {
+    matches = matches.filter((item) => item.menuItemId === menuItemId);
+  }
+
+  if (itemName) {
+    matches = matches.filter((item) => item.name === itemName);
+  }
+
+  if (itemNotes) {
+    matches = matches.filter((item) => item.notes === itemNotes);
+  }
+
+  return matches;
+}
+
+function toExternalItemStatusPresentation(
+  type: string,
+  diff: Record<string, unknown>,
+): ExternalItemStatusPresentation | null {
+  switch (type) {
+    case "item_removed":
+      return {
+        kind: "canceled",
+        label: "Cancelado",
+        detail: "Item removido do pedido no provedor.",
+      };
+    case "quantity_changed": {
+      const before = asNumber(diff.before);
+      const after = asNumber(diff.after);
+
+      if (
+        before !== null &&
+        after !== null &&
+        after >= 0 &&
+        after < before
+      ) {
+        return {
+          kind: "changed",
+          label: `Qtd. agora ${after}`,
+          detail: "Quantidade reduzida no provedor.",
+        };
+      }
+
+      return {
+        kind: "changed",
+        label: "Quantidade alterada",
+        detail: "Quantidade alterada no provedor após a importação.",
+      };
+    }
+    case "menu_item_changed":
+      return {
+        kind: "changed",
+        label: "Item alterado",
+        detail: "O item foi trocado no provedor após a importação.",
+      };
+    case "name_changed":
+      return {
+        kind: "changed",
+        label: "Nome alterado",
+        detail: "O nome do item mudou no provedor após a importação.",
+      };
+    case "item_notes_changed":
+      return {
+        kind: "changed",
+        label: "Observação alterada",
+        detail: "A observação do item foi alterada no provedor.",
+      };
+    case "modifiers_changed":
+      return {
+        kind: "changed",
+        label: "Modificador alterado",
+        detail: "Os modificadores do item foram alterados no provedor.",
+      };
+    default:
+      return null;
+  }
+}
+
+function isCanceledExternalStatus(
+  status: ExternalItemStatusPresentation | null | undefined,
+) {
+  return status?.kind === "canceled";
+}
+
+function deriveOperationalTicketStatus(
+  items: OrderAggregate["items"],
+  itemStatuses: Map<string, ExternalItemStatusPresentation>,
+  exception?: SyncExceptionRecord,
+): TicketStatus {
+  if (exception?.kind === "canceled_externally") {
+    return "canceled";
+  }
+
+  const activeItems = items.filter(
+    (item) => !isCanceledExternalStatus(itemStatuses.get(item.id)),
+  );
+
+  if (activeItems.length === 0) {
+    return deriveTicketStatus(items);
+  }
+
+  return deriveTicketStatus(activeItems);
+}
+
+function projectProviderStatusToTicketStatus(
+  localStatus: TicketStatus,
+  providerStatus: string | null | undefined,
+) {
+  if (localStatus === "canceled" || localStatus !== "new") {
+    return localStatus;
+  }
+
+  if (providerStatus === "in_production") {
+    return "in_preparation" as const;
+  }
+
+  if (providerStatus === "ready" || providerStatus === "finalized") {
+    return "ready" as const;
+  }
+
+  return localStatus;
+}
+
+function buildOperationalTicketStatuses(
+  aggregate: OrderAggregate,
+  itemStatuses: Map<string, ExternalItemStatusPresentation>,
+  exception?: SyncExceptionRecord,
+  providerStatus?: string | null,
+) {
+  return new Map(
+    aggregate.tickets.map((ticket) => [
+      ticket.kitchenId,
+      projectProviderStatusToTicketStatus(
+        deriveOperationalTicketStatus(
+          aggregate.items.filter((item) => item.kitchenId === ticket.kitchenId),
+          itemStatuses,
+          exception,
+        ),
+        providerStatus,
+      ),
+    ]),
+  );
+}
+
+function toOrderItemPresentation(
+  items: OrderAggregate["items"],
+  itemStatuses: Map<string, ExternalItemStatusPresentation>,
+): OrderItemPresentation[] {
+  return [...items]
+    .map((item) => ({
+      id: item.id,
+      name: item.name,
+      quantity: item.quantity,
+      notes: item.notes,
+      status: item.status,
+      externalStatus: itemStatuses.get(item.id) ?? null,
+    }))
+    .sort((left, right) => {
+      const leftPriority = left.externalStatus?.kind === "canceled" ? 1 : 0;
+      const rightPriority = right.externalStatus?.kind === "canceled" ? 1 : 0;
+
+      if (leftPriority !== rightPriority) {
+        return leftPriority - rightPriority;
+      }
+
+      return left.name.localeCompare(right.name, undefined, {
+        numeric: true,
+      });
+    });
+}
+
+function buildProductionReadContext(
+  repository: ProductionRepository,
+): ProductionReadContext {
   const kitchens = repository.listKitchens();
   const aggregates = repository.listOrderAggregates();
-  const columnStatuses = ["new", "in_preparation", "ready"] as const;
   const syncRepository = hasSyncReadSupport(repository) ? repository : null;
   const orderIds = aggregates.map((aggregate) => aggregate.order.id);
   const unresolvedExceptions = syncRepository
@@ -420,8 +729,145 @@ export function getDashboardData(repository: ProductionRepository): DashboardDat
     latestExceptionByOrderId.set(exception.orderId, exception);
   }
 
-  const kitchenBoards = kitchens.map((kitchen) => {
-    const cards = aggregates
+  return {
+    repository,
+    kitchens,
+    aggregates,
+    syncRepository,
+    unresolvedExceptions,
+    aggregateByOrderId,
+    latestExceptionByOrderId,
+  };
+}
+
+function buildSalonSummary(
+  context: ProductionReadContext,
+): SalonSummaryOrder[] {
+  return context.aggregates
+    .map((aggregate) => {
+      const syncException = context.latestExceptionByOrderId.get(aggregate.order.id);
+      const providerState = context.syncRepository
+        ? context.syncRepository.getProviderOrder({
+            provider: "anota_ai",
+            externalOrderId: aggregate.order.externalId,
+          })
+        : undefined;
+      const itemStatuses = buildItemExternalStatuses(syncException, aggregate);
+      const ticketStatusesByKitchenId = buildOperationalTicketStatuses(
+        aggregate,
+        itemStatuses,
+        syncException,
+        providerState?.providerStatus,
+      );
+
+      const ticketBreakdown = aggregate.tickets.map((ticket) => {
+        const kitchen = context.kitchens.find(
+          (candidate) => candidate.id === ticket.kitchenId,
+        );
+        const status =
+          ticketStatusesByKitchenId.get(ticket.kitchenId) ??
+          projectProviderStatusToTicketStatus(
+            deriveOperationalTicketStatus(
+              aggregate.items.filter((item) => item.kitchenId === ticket.kitchenId),
+              itemStatuses,
+              syncException,
+            ),
+            providerState?.providerStatus,
+          );
+
+        return {
+          kitchenName: kitchen?.name ?? ticket.kitchenId,
+          statusLabel: TICKET_STATUS_LABELS[status],
+        };
+      });
+
+      const orderStatus = deriveOrderStatus(
+        aggregate.tickets.map((ticket) => ({
+          ...ticket,
+          status:
+            ticketStatusesByKitchenId.get(ticket.kitchenId) ??
+            projectProviderStatusToTicketStatus(
+              deriveOperationalTicketStatus(
+                aggregate.items.filter((item) => item.kitchenId === ticket.kitchenId),
+                itemStatuses,
+                syncException,
+              ),
+              providerState?.providerStatus,
+            ),
+        })),
+      );
+
+      return {
+        orderId: aggregate.order.id,
+        reference: aggregate.order.reference,
+        customerName: aggregate.order.customerName,
+        orderStatus: ORDER_STATUS_LABELS[orderStatus],
+        hasOpenSyncException: Boolean(syncException),
+        syncExceptionLabel: syncException
+          ? SYNC_EXCEPTION_LABELS[syncException.kind]
+          : null,
+        syncException: syncException
+          ? toSyncExceptionPresentation(syncException)
+          : null,
+        ticketBreakdown,
+      };
+    })
+    .sort((left, right) =>
+      left.reference.localeCompare(right.reference, undefined, { numeric: true }),
+    );
+}
+
+function buildDashboardMetrics(
+  salonSummary: SalonSummaryOrder[],
+): DashboardMetrics {
+  return {
+    activeOrders: salonSummary.filter(
+      (order) => order.orderStatus !== ORDER_STATUS_LABELS.canceled,
+    ).length,
+    partiallyReadyOrders: salonSummary.filter(
+      (order) => order.orderStatus === ORDER_STATUS_LABELS.partially_ready,
+    ).length,
+    readyToServeOrders: salonSummary.filter(
+      (order) => order.orderStatus === ORDER_STATUS_LABELS.ready_to_serve,
+    ).length,
+  };
+}
+
+function buildSyncAlerts(context: ProductionReadContext): SyncAlert[] {
+  return context.unresolvedExceptions.map<SyncAlert>((exception) => {
+    const presentation = toSyncExceptionPresentation(exception);
+    const aggregate = exception.orderId
+      ? context.aggregateByOrderId.get(exception.orderId)
+      : undefined;
+
+    return {
+      id: exception.id,
+      label: presentation.label,
+      statusLabel: presentation.statusLabel,
+      summary: presentation.summary,
+      detail: presentation.detail,
+      status: presentation.status,
+      orderId: exception.orderId,
+      externalOrderId: exception.externalOrderId,
+      reference:
+        aggregate?.order.reference ??
+        (exception.externalOrderId
+          ? `Pedido externo ${exception.externalOrderId}`
+          : "Pedido externo sem vínculo"),
+      customerName: aggregate?.order.customerName ?? null,
+      focusKitchenId: aggregate?.tickets[0]?.kitchenId ?? null,
+      detectedAt: exception.detectedAt,
+      lastSeenAt: exception.lastSeenAt,
+    };
+  });
+}
+
+export function getDashboardData(repository: ProductionRepository): DashboardData {
+  const context = buildProductionReadContext(repository);
+  const columnStatuses = ["new", "in_preparation", "ready", "canceled"] as const;
+
+  const kitchenBoards = context.kitchens.map((kitchen) => {
+    const cards = context.aggregates
       .flatMap((aggregate) => {
         const ticket = aggregate.tickets.find(
           (candidate) => candidate.kitchenId === kitchen.id,
@@ -441,24 +887,57 @@ export function getDashboardData(repository: ProductionRepository): DashboardDat
           (item) => item.kitchenId !== kitchen.id,
         );
 
-        const ticketStatus = deriveTicketStatus(ticketItems);
-        const orderStatus = deriveOrderStatus(
-          aggregate.tickets.map((candidate) => ({
-            ...candidate,
-            status: deriveTicketStatus(
-              aggregate.items.filter(
-                (item) => item.kitchenId === candidate.kitchenId,
-              ),
-            ),
-          })),
-        );
-
         return [
           (() => {
-            const syncException = latestExceptionByOrderId.get(aggregate.order.id);
+            const syncException = context.latestExceptionByOrderId.get(
+              aggregate.order.id,
+            );
             const syncPresentation = syncException
               ? toSyncExceptionPresentation(syncException)
               : null;
+            const providerState = context.syncRepository
+              ? context.syncRepository.getProviderOrder({
+                  provider: "anota_ai",
+                  externalOrderId: aggregate.order.externalId,
+                })
+              : undefined;
+            const itemStatuses = buildItemExternalStatuses(
+              syncException,
+              aggregate,
+            );
+            const ticketStatusesByKitchenId = buildOperationalTicketStatuses(
+              aggregate,
+              itemStatuses,
+              syncException,
+              providerState?.providerStatus,
+            );
+            const ticketStatus =
+              ticketStatusesByKitchenId.get(kitchen.id) ??
+              projectProviderStatusToTicketStatus(
+                deriveOperationalTicketStatus(
+                  ticketItems,
+                  itemStatuses,
+                  syncException,
+                ),
+                providerState?.providerStatus,
+              );
+            const orderStatus = deriveOrderStatus(
+              aggregate.tickets.map((candidate) => ({
+                ...candidate,
+                status:
+                  ticketStatusesByKitchenId.get(candidate.kitchenId) ??
+                  projectProviderStatusToTicketStatus(
+                    deriveOperationalTicketStatus(
+                      aggregate.items.filter(
+                        (item) => item.kitchenId === candidate.kitchenId,
+                      ),
+                      itemStatuses,
+                      syncException,
+                    ),
+                    providerState?.providerStatus,
+                  ),
+              })),
+            );
 
             return {
               orderId: aggregate.order.id,
@@ -472,18 +951,24 @@ export function getDashboardData(repository: ProductionRepository): DashboardDat
               orderStatus,
               orderStatusLabel: ORDER_STATUS_LABELS[orderStatus],
               ageLabel: formatAgeLabel(aggregate.order.createdAt),
-              currentItems: ticketItems.map((item) => ({
-                id: item.id,
-                name: item.name,
-                quantity: item.quantity,
-                status: item.status,
-              })),
+              currentItems: toOrderItemPresentation(ticketItems, itemStatuses),
               otherKitchenStatus: otherTicket
-                ? TICKET_STATUS_LABELS[deriveTicketStatus(otherItems)]
+                ? TICKET_STATUS_LABELS[
+                    ticketStatusesByKitchenId.get(otherTicket.kitchenId) ??
+                      projectProviderStatusToTicketStatus(
+                        deriveOperationalTicketStatus(
+                          otherItems,
+                          itemStatuses,
+                          syncException,
+                        ),
+                        providerState?.providerStatus,
+                      )
+                  ]
                 : null,
               otherKitchenName: otherTicket
-                ? kitchens.find((candidate) => candidate.id === otherTicket.kitchenId)
-                    ?.name ?? null
+                ? context.kitchens.find(
+                    (candidate) => candidate.id === otherTicket.kitchenId,
+                  )?.name ?? null
                 : null,
               hasOpenSyncException: Boolean(syncPresentation),
               syncExceptionLabel: syncPresentation?.label ?? null,
@@ -510,91 +995,26 @@ export function getDashboardData(repository: ProductionRepository): DashboardDat
     };
   });
 
-  const salonSummary = aggregates
-    .map((aggregate) => {
-      const syncException = latestExceptionByOrderId.get(aggregate.order.id);
-
-      const breakdown = aggregate.tickets.map((ticket) => {
-        const kitchen = kitchens.find((candidate) => candidate.id === ticket.kitchenId);
-        const status = deriveTicketStatus(
-          aggregate.items.filter((item) => item.kitchenId === ticket.kitchenId),
-        );
-
-        return {
-          kitchenName: kitchen?.name ?? ticket.kitchenId,
-          statusLabel: TICKET_STATUS_LABELS[status],
-        };
-      });
-
-      const orderStatus = deriveOrderStatus(
-        aggregate.tickets.map((ticket) => ({
-          ...ticket,
-          status: deriveTicketStatus(
-            aggregate.items.filter((item) => item.kitchenId === ticket.kitchenId),
-          ),
-        })),
-      );
-
-      return {
-        orderId: aggregate.order.id,
-        reference: aggregate.order.reference,
-        customerName: aggregate.order.customerName,
-        orderStatus: ORDER_STATUS_LABELS[orderStatus],
-        hasOpenSyncException: Boolean(syncException),
-        syncExceptionLabel: syncException
-          ? SYNC_EXCEPTION_LABELS[syncException.kind]
-          : null,
-        syncException: syncException
-          ? toSyncExceptionPresentation(syncException)
-          : null,
-        ticketBreakdown: breakdown,
-      };
-    })
-    .sort((left, right) =>
-      left.reference.localeCompare(right.reference, undefined, { numeric: true }),
-    );
-
-  const syncAlerts = unresolvedExceptions.map<SyncAlert>((exception) => {
-    const presentation = toSyncExceptionPresentation(exception);
-    const aggregate = exception.orderId
-      ? aggregateByOrderId.get(exception.orderId)
-      : undefined;
-
-    return {
-      id: exception.id,
-      label: presentation.label,
-      statusLabel: presentation.statusLabel,
-      summary: presentation.summary,
-      detail: presentation.detail,
-      status: presentation.status,
-      orderId: exception.orderId,
-      externalOrderId: exception.externalOrderId,
-      reference:
-        aggregate?.order.reference ??
-        (exception.externalOrderId
-          ? `Pedido externo ${exception.externalOrderId}`
-          : "Pedido externo sem vínculo"),
-      customerName: aggregate?.order.customerName ?? null,
-      focusKitchenId: aggregate?.tickets[0]?.kitchenId ?? null,
-      detectedAt: exception.detectedAt,
-      lastSeenAt: exception.lastSeenAt,
-    };
-  });
+  const salonSummary = buildSalonSummary(context);
 
   return {
     kitchens: kitchenBoards,
-    openSyncExceptions: unresolvedExceptions.length,
-    syncAlerts,
+    openSyncExceptions: context.unresolvedExceptions.length,
+    syncAlerts: buildSyncAlerts(context),
     salonSummary,
-    metrics: {
-      activeOrders: aggregates.length,
-      partiallyReadyOrders: salonSummary.filter(
-        (order) => order.orderStatus === ORDER_STATUS_LABELS.partially_ready,
-      ).length,
-      readyToServeOrders: salonSummary.filter(
-        (order) => order.orderStatus === ORDER_STATUS_LABELS.ready_to_serve,
-      ).length,
-    },
+    metrics: buildDashboardMetrics(salonSummary),
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+export function getSalonData(repository: ProductionRepository): SalonData {
+  const context = buildProductionReadContext(repository);
+  const summary = buildSalonSummary(context);
+
+  return {
+    summary,
+    metrics: buildDashboardMetrics(summary),
+    openSyncExceptions: context.unresolvedExceptions.length,
     generatedAt: new Date().toISOString(),
   };
 }
@@ -637,17 +1057,45 @@ export function getOrderDetailData(
   const syncException = syncRepository
     ? syncRepository.getUnresolvedSyncExceptionForOrder(orderId)
     : undefined;
+  const providerState = syncRepository
+    ? syncRepository.getProviderOrder({
+        provider: "anota_ai",
+        externalOrderId: aggregate.order.externalId,
+      })
+    : undefined;
   const syncTrail = syncRepository
     ? buildSyncTrail(syncRepository.listSyncExceptionsForOrder(orderId))
     : [];
-
-  const focusStatus = deriveTicketStatus(focusItems);
+  const itemStatuses = buildItemExternalStatuses(syncException, aggregate);
+  const ticketStatusesByKitchenId = buildOperationalTicketStatuses(
+    aggregate,
+    itemStatuses,
+    syncException,
+    providerState?.providerStatus,
+  );
+  const focusStatus =
+    ticketStatusesByKitchenId.get(focusKitchenId) ??
+    projectProviderStatusToTicketStatus(
+      deriveOperationalTicketStatus(
+        focusItems,
+        itemStatuses,
+        syncException,
+      ),
+      providerState?.providerStatus,
+    );
   const orderStatus = deriveOrderStatus(
     aggregate.tickets.map((ticket) => ({
       ...ticket,
-      status: deriveTicketStatus(
-        aggregate.items.filter((item) => item.kitchenId === ticket.kitchenId),
-      ),
+      status:
+        ticketStatusesByKitchenId.get(ticket.kitchenId) ??
+        projectProviderStatusToTicketStatus(
+          deriveOperationalTicketStatus(
+            aggregate.items.filter((item) => item.kitchenId === ticket.kitchenId),
+            itemStatuses,
+            syncException,
+          ),
+          providerState?.providerStatus,
+        ),
     })),
   );
 
@@ -661,28 +1109,36 @@ export function getOrderDetailData(
     focusKitchenStatus: TICKET_STATUS_LABELS[focusStatus],
     orderStatusKey: orderStatus,
     orderStatus: ORDER_STATUS_LABELS[orderStatus],
-    focusItems: focusItems.map((item) => ({
-      id: item.id,
-      name: item.name,
-      quantity: item.quantity,
-      notes: item.notes,
-      status: item.status,
-    })),
+    focusItems: toOrderItemPresentation(focusItems, itemStatuses),
     otherKitchen: otherKitchen
       ? {
           id: otherKitchen.kitchenId,
           name:
             kitchens.find((kitchen) => kitchen.id === otherKitchen.kitchenId)
               ?.name ?? otherKitchen.kitchenId,
-          statusKey: deriveTicketStatus(otherItems),
-          status: TICKET_STATUS_LABELS[deriveTicketStatus(otherItems)],
-          items: otherItems.map((item) => ({
-            id: item.id,
-            name: item.name,
-            quantity: item.quantity,
-            notes: item.notes,
-            status: item.status,
-          })),
+          statusKey:
+            ticketStatusesByKitchenId.get(otherKitchen.kitchenId) ??
+            projectProviderStatusToTicketStatus(
+              deriveOperationalTicketStatus(
+                otherItems,
+                itemStatuses,
+                syncException,
+              ),
+              providerState?.providerStatus,
+            ),
+          status:
+            TICKET_STATUS_LABELS[
+              ticketStatusesByKitchenId.get(otherKitchen.kitchenId) ??
+                projectProviderStatusToTicketStatus(
+                  deriveOperationalTicketStatus(
+                    otherItems,
+                    itemStatuses,
+                    syncException,
+                  ),
+                  providerState?.providerStatus,
+                )
+            ],
+          items: toOrderItemPresentation(otherItems, itemStatuses),
         }
       : null,
     syncException: syncException

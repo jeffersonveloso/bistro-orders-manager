@@ -3,10 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import {
   getDashboardData,
   getOrderDetailData,
+  getSalonData,
 } from "@/src/application/production-service";
 import type { ProductionRepository } from "@/src/application/ports";
 import type { OrderAggregate } from "@/src/domain/production";
-import type { SyncExceptionRecord } from "@/src/domain/provider-sync";
+import type {
+  ProviderOrderState,
+  SyncExceptionRecord,
+} from "@/src/domain/provider-sync";
 import { createProductionTestContext } from "@/src/infrastructure/sqlite";
 
 function createAggregate(orderId = "order_sync"): OrderAggregate {
@@ -95,12 +99,17 @@ function createReadModelRepository({
   aggregate = createAggregate(),
   unresolvedExceptions = [],
   history = unresolvedExceptions,
+  providerStates = [],
 }: {
   aggregate?: OrderAggregate;
   unresolvedExceptions?: SyncExceptionRecord[];
   history?: SyncExceptionRecord[];
+  providerStates?: ProviderOrderState[];
 }) {
   const orderId = aggregate.order.id;
+  const providerStateByExternalOrderId = new Map(
+    providerStates.map((state) => [state.externalOrderId, state] as const),
+  );
 
   return {
     listKitchens() {
@@ -134,6 +143,9 @@ function createReadModelRepository({
     listUnresolvedSyncExceptions() {
       return unresolvedExceptions;
     },
+    getProviderOrder({ externalOrderId }: { externalOrderId: string }) {
+      return providerStateByExternalOrderId.get(externalOrderId);
+    },
     listUnresolvedSyncExceptionsByOrderIds(orderIds: string[]) {
       return unresolvedExceptions.filter(
         (exception) =>
@@ -152,6 +164,37 @@ function createReadModelRepository({
 }
 
 describe("production demo scenarios", () => {
+  it("builds a dedicated salon contract without kitchen board columns", () => {
+    const repository = createReadModelRepository({
+      unresolvedExceptions: [createSyncException()],
+    });
+
+    const salonData = getSalonData(repository);
+
+    expect(salonData).toEqual(
+      expect.objectContaining({
+        openSyncExceptions: 1,
+        metrics: expect.objectContaining({
+          activeOrders: 1,
+          partiallyReadyOrders: 0,
+          readyToServeOrders: 0,
+        }),
+        summary: [
+          expect.objectContaining({
+            orderId: "order_sync",
+            reference: "Pedido Sync",
+            hasOpenSyncException: true,
+            syncException: expect.objectContaining({
+              label: "Mudança externa",
+            }),
+          }),
+        ],
+      }),
+    );
+    expect("kitchens" in salonData).toBe(false);
+    expect("syncAlerts" in salonData).toBe(false);
+  });
+
   it("seeds acceptance scenarios for single-kitchen, partially-ready, and ready-to-serve orders", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-11T10:30:00.000Z"));
@@ -329,6 +372,116 @@ describe("production demo scenarios", () => {
     } finally {
       context.close();
     }
+  });
+
+  it("marks removed provider items as canceled in the operational projection without rewriting the stored order", () => {
+    const exception = createSyncException({
+      details: {
+        diffs: [
+          {
+            type: "item_removed",
+            externalItemId: "drink",
+          },
+        ],
+      },
+    });
+    const repository = createReadModelRepository({
+      unresolvedExceptions: [exception],
+    });
+
+    const dashboard = getDashboardData(repository);
+    const detail = getOrderDetailData(repository, "order_sync", "kitchen-1");
+    const kitchen1Card = dashboard.kitchens
+      .find((kitchen) => kitchen.id === "kitchen-1")
+      ?.columns.flatMap((column) => column.tickets)
+      .find((ticket) => ticket.orderId === "order_sync");
+
+    expect(kitchen1Card).toEqual(
+      expect.objectContaining({
+        ticketStatus: "new",
+        currentItems: [
+          expect.objectContaining({
+            name: "Café gelado",
+            externalStatus: expect.objectContaining({
+              kind: "canceled",
+              label: "Cancelado",
+              detail: "Item removido do pedido no provedor.",
+            }),
+          }),
+        ],
+      }),
+    );
+    expect(detail).toEqual(
+      expect.objectContaining({
+        focusTicketStatus: "new",
+        focusItems: [
+          expect.objectContaining({
+            name: "Café gelado",
+            externalStatus: expect.objectContaining({
+              kind: "canceled",
+              label: "Cancelado",
+            }),
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("cancels only the matching item when the provider reused a duplicated line identifier", () => {
+    const exception = createSyncException({
+      details: {
+        diffs: [
+          {
+            type: "item_removed",
+            externalItemId: "0",
+            matchKey: "route:iced-coffee",
+            before: {
+              menuItemId: "iced-coffee",
+              name: "Café gelado",
+            },
+          },
+        ],
+      },
+    });
+    const aggregate = {
+      ...createAggregate(),
+      items: [
+        {
+          ...createAggregate().items[0]!,
+          externalItemId: "0",
+        },
+        {
+          ...createAggregate().items[1]!,
+          externalItemId: "0",
+        },
+      ],
+    };
+    const repository = createReadModelRepository({
+      aggregate,
+      unresolvedExceptions: [exception],
+    });
+
+    const detail = getOrderDetailData(repository, "order_sync", "kitchen-1");
+    const otherKitchenDetail = getOrderDetailData(
+      repository,
+      "order_sync",
+      "kitchen-2",
+    );
+
+    expect(detail?.focusItems).toEqual([
+      expect.objectContaining({
+        name: "Café gelado",
+        externalStatus: expect.objectContaining({
+          kind: "canceled",
+        }),
+      }),
+    ]);
+    expect(otherKitchenDetail?.focusItems).toEqual([
+      expect.objectContaining({
+        name: "Croissant",
+        externalStatus: null,
+      }),
+    ]);
   });
 
   it("keeps acknowledged exceptions visible in salon summary until reconciliation resolves them", () => {
@@ -528,6 +681,128 @@ describe("production demo scenarios", () => {
           detail: "Estado atual no provedor: CANCELED.",
         }),
       ]),
+    );
+  });
+
+  it("projects canceled_externally orders into canceled ticket and order statuses", () => {
+    const exception = createSyncException({
+      kind: "canceled_externally",
+      summary: "Pedido Sync saiu de confirmed_ready no provedor",
+      details: {
+        providerStatus: "CANCELED",
+      },
+    });
+    const repository = createReadModelRepository({
+      unresolvedExceptions: [exception],
+    });
+
+    const dashboard = getDashboardData(repository);
+    const detail = getOrderDetailData(repository, "order_sync", "kitchen-1");
+    const kitchen1Canceled = dashboard.kitchens
+      .find((kitchen) => kitchen.id === "kitchen-1")
+      ?.columns.find((column) => column.status === "canceled")
+      ?.tickets.find((ticket) => ticket.orderId === "order_sync");
+    const salonOrder = dashboard.salonSummary.find(
+      (order) => order.orderId === "order_sync",
+    );
+
+    expect(kitchen1Canceled).toEqual(
+      expect.objectContaining({
+        ticketStatus: "canceled",
+        ticketStatusLabel: "Cancelado",
+        orderStatus: "canceled",
+        orderStatusLabel: "Cancelado",
+      }),
+    );
+    expect(detail).toEqual(
+      expect.objectContaining({
+        focusTicketStatus: "canceled",
+        focusKitchenStatus: "Cancelado",
+        orderStatusKey: "canceled",
+        orderStatus: "Cancelado",
+      }),
+    );
+    expect(salonOrder).toEqual(
+      expect.objectContaining({
+        orderStatus: "Cancelado",
+      }),
+    );
+  });
+
+  it("projects finalized provider orders out of Novo even when local kitchen progress never started", () => {
+    const aggregate = createAggregate();
+    const providerState: ProviderOrderState = {
+      provider: "anota_ai",
+      externalOrderId: aggregate.order.externalId,
+      providerStatus: "finalized",
+      lifecycle: "confirmed_ready",
+      snapshotHash: "hash-finalized",
+      snapshot: {
+        provider: "anota_ai",
+        externalOrderId: aggregate.order.externalId,
+        reference: aggregate.order.reference,
+        customerName: aggregate.order.customerName ?? undefined,
+        channel: "anotaai",
+        providerStatus: "finalized",
+        lifecycle: "confirmed_ready",
+        providerUpdatedAt: "2026-05-11T12:10:00.000Z",
+        items: [
+          {
+            externalItemId: "drink",
+            catalogExternalId: "iced-coffee",
+            name: "Café gelado",
+            quantity: 1,
+            modifiers: [],
+          },
+          {
+            externalItemId: "bakery",
+            catalogExternalId: "croissant",
+            name: "Croissant",
+            quantity: 1,
+            modifiers: [],
+          },
+        ],
+        rawPayload: {},
+      },
+      lastSeenAt: "2026-05-11T12:10:00.000Z",
+      lastAppliedAt: "2026-05-11T12:10:00.000Z",
+      importedOrderId: aggregate.order.id,
+    };
+    const repository = createReadModelRepository({
+      aggregate,
+      providerStates: [providerState],
+    });
+
+    const dashboard = getDashboardData(repository);
+    const detail = getOrderDetailData(repository, "order_sync", "kitchen-1");
+    const kitchen1Ready = dashboard.kitchens
+      .find((kitchen) => kitchen.id === "kitchen-1")
+      ?.columns.find((column) => column.status === "ready")
+      ?.tickets.find((ticket) => ticket.orderId === "order_sync");
+    const salonOrder = dashboard.salonSummary.find(
+      (order) => order.orderId === "order_sync",
+    );
+
+    expect(kitchen1Ready).toEqual(
+      expect.objectContaining({
+        ticketStatus: "ready",
+        ticketStatusLabel: "Pronto",
+        orderStatus: "ready_to_serve",
+        orderStatusLabel: "Pronto para servir",
+      }),
+    );
+    expect(detail).toEqual(
+      expect.objectContaining({
+        focusTicketStatus: "ready",
+        focusKitchenStatus: "Pronto",
+        orderStatusKey: "ready_to_serve",
+        orderStatus: "Pronto para servir",
+      }),
+    );
+    expect(salonOrder).toEqual(
+      expect.objectContaining({
+        orderStatus: "Pronto para servir",
+      }),
     );
   });
 
