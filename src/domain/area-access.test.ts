@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   getCanonicalAreaPath,
+  getCanonicalKitchenOrderPath,
   isAreaId,
   isKitchenArea,
   isKitchenAreaId,
@@ -12,6 +13,9 @@ describe("area access domain policy", () => {
     expect(getCanonicalAreaPath("kitchen-1")).toBe("/");
     expect(getCanonicalAreaPath("kitchen-2")).toBe("/");
     expect(getCanonicalAreaPath("salon")).toBe("/salon");
+    expect(getCanonicalKitchenOrderPath("order-101", "kitchen-2")).toBe(
+      "/orders/order-101?kitchen=kitchen-2",
+    );
   });
 
   it("keeps kitchen and salon identity helpers isolated from production.ts", () => {

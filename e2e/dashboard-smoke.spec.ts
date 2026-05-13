@@ -2,7 +2,9 @@ import { expect, test } from "@playwright/test";
 
 import { loginThroughAccess } from "@/e2e/support/access";
 
-test("loads the dashboard and reaches the salon view", async ({ page }) => {
+test("loads the dashboard and blocks cross-area shortcuts through canonical redirects", async ({
+  page,
+}) => {
   await loginThroughAccess(page, {
     areaId: "kitchen-1",
     pin: "1111",
@@ -28,12 +30,15 @@ test("loads the dashboard and reaches the salon view", async ({ page }) => {
 
   await page.getByTestId("open-salon-view").click();
 
-  await expect(page).toHaveURL(/\/salon$/);
-  await expect(page.getByRole("heading", { name: "Salão" })).toBeVisible();
-  await expect(page.getByTestId("salon-order-order_anota-103")).toContainText(
-    "Pronto para entregar",
-  );
+  await expect(page).toHaveURL(/\/$/);
   await expect(
-    page.getByTestId("salon-sync-exception-order_anota-101"),
-  ).toContainText("Mudança externa");
+    page.getByRole("heading", { name: "Sync board para duas cozinhas" }),
+  ).toBeVisible();
+
+  await page.goto("/catalog");
+
+  await expect(page).toHaveURL(/\/$/);
+  await expect(
+    page.getByRole("heading", { name: "Sync board para duas cozinhas" }),
+  ).toBeVisible();
 });

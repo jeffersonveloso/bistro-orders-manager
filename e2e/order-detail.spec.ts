@@ -1,10 +1,21 @@
 import { expect, test } from "@playwright/test";
 
+import { loginThroughAccess } from "@/e2e/support/access";
+
 test.describe("order detail flows", () => {
   test("keeps cross-kitchen visibility while mutating a mixed order item", async ({
     page,
   }) => {
-    await page.goto("/orders/order_anota-101?kitchen=kitchen-1");
+    await loginThroughAccess(page, {
+      areaId: "kitchen-1",
+      pin: "1111",
+    });
+
+    await page.goto("/orders/order_anota-101");
+
+    await expect(page).toHaveURL(
+      /\/orders\/order_anota-101\?kitchen=kitchen-1$/,
+    );
 
     await expect(page.getByRole("heading", { name: "Mesa 4" })).toBeVisible();
     await expect(page.getByTestId("focus-kitchen-name")).toHaveText("Kitchen 1");
@@ -35,6 +46,11 @@ test.describe("order detail flows", () => {
   test("shows no cross-kitchen dependency for a single-kitchen order", async ({
     page,
   }) => {
+    await loginThroughAccess(page, {
+      areaId: "kitchen-1",
+      pin: "1111",
+    });
+
     await page.goto("/orders/order_anota-105?kitchen=kitchen-1");
 
     await expect(page.getByRole("heading", { name: "Mesa 2" })).toBeVisible();

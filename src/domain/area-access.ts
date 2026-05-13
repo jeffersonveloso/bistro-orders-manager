@@ -36,3 +36,10 @@ export function isKitchenArea(areaId: AreaId): areaId is KitchenAreaId {
 export function getCanonicalAreaPath(areaId: AreaId) {
   return canonicalAreaPaths[areaId];
 }
+
+export function getCanonicalKitchenOrderPath(
+  orderId: string,
+  kitchenId: KitchenAreaId,
+) {
+  return `/orders/${encodeURIComponent(orderId)}?kitchen=${kitchenId}`;
+}

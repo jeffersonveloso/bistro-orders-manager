@@ -1,6 +1,7 @@
 import {
   AREA_SESSION_VERSION,
   getCanonicalAreaPath,
+  getCanonicalKitchenOrderPath,
   isKitchenArea,
   type AreaId,
   type AreaSession,
@@ -125,11 +126,10 @@ export function createAreaAccessService(
         return fallbackPath;
       }
 
-      parsedTarget.searchParams.set("kitchen", session.areaId);
-
-      const search = parsedTarget.searchParams.toString();
-
-      return `${parsedTarget.pathname}${search.length > 0 ? `?${search}` : ""}`;
+      return getCanonicalKitchenOrderPath(
+        parsedTarget.pathname.slice("/orders/".length),
+        session.areaId,
+      );
     },
   };
 }

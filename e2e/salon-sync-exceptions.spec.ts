@@ -1,9 +1,14 @@
 import { expect, test } from "@playwright/test";
 
+import { loginThroughAccess } from "@/e2e/support/access";
+
 test("acknowledges a salon exception without clearing unresolved visibility", async ({
   page,
 }) => {
-  await page.goto("/salon");
+  await loginThroughAccess(page, {
+    areaId: "salon",
+    pin: "3333",
+  });
 
   const exceptionCard = page.getByTestId("salon-sync-exception-order_anota-101");
   const acknowledgeButton = page.getByTestId(
@@ -29,6 +34,8 @@ test("acknowledges a salon exception without clearing unresolved visibility", as
 
   const response = await responsePromise;
   expect(response.status()).toBe(200);
+
+  await page.reload();
 
   await expect(exceptionCard).toContainText("Mudança externa");
   await expect(exceptionCard).toContainText("Salão ciente");

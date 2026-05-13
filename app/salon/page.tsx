@@ -1,19 +1,21 @@
-import { requireKitchenPageAccess, type AreaPageDependencies } from "@/app/_lib/area-access-page";
+import { requireSalonPageAccess, type AreaPageDependencies } from "@/app/_lib/area-access-page";
 import type { ProductionRepository } from "@/src/application/ports";
 import { getDashboardData } from "@/src/application/production-service";
-import { DashboardClient } from "@/src/components/kds/dashboard-client";
+import { SalonClient } from "@/src/components/kds/salon-client";
 import { maybeRefreshRuntimeProviderSync } from "@/src/infrastructure/runtime-provider-sync-refresh";
 import { getProductionRepository } from "@/src/infrastructure/sqlite";
 
 export const dynamic = "force-dynamic";
 
-export interface HomePageDependencies extends AreaPageDependencies {
+export interface SalonPageDependencies extends AreaPageDependencies {
   refresh?: () => Promise<void> | void;
   repository?: ProductionRepository;
 }
 
-export async function loadHomePage(dependencies: HomePageDependencies = {}) {
-  await requireKitchenPageAccess(dependencies);
+export async function loadSalonPage(
+  dependencies: SalonPageDependencies = {},
+) {
+  await requireSalonPageAccess(dependencies);
   await runReadRefresh(dependencies);
 
   return {
@@ -23,15 +25,13 @@ export async function loadHomePage(dependencies: HomePageDependencies = {}) {
   };
 }
 
-export default async function Home() {
-  const { initialData } = await loadHomePage();
+export default async function SalonPage() {
+  const { initialData } = await loadSalonPage();
 
-  return (
-    <DashboardClient initialData={initialData} />
-  );
+  return <SalonClient initialData={initialData} />;
 }
 
-async function runReadRefresh(dependencies: HomePageDependencies) {
+async function runReadRefresh(dependencies: SalonPageDependencies) {
   const refresh = dependencies.refresh;
 
   if (refresh) {
