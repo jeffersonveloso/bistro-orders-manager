@@ -41,7 +41,7 @@ function createCookieHeader(
 ) {
   const session = {
     areaId: input.areaId,
-    expiresAt: input.expiresAt ?? "2026-05-13T16:00:00.000Z",
+    expiresAt: input.expiresAt ?? "2099-12-31T23:59:59.000Z",
     issuedAt: input.issuedAt ?? "2026-05-13T00:00:00.000Z",
     version: input.version ?? 1,
   };

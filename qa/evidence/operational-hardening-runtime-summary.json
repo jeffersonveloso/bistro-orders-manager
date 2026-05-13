@@ -1,0 +1,44 @@
+{
+  "executedAt": "2026-05-13T16:11:03.703Z",
+  "statuses": {
+    "boardUnauthorized": "401",
+    "invalidPin": "401",
+    "loginKitchen1": "200",
+    "loginSalon": "200",
+    "boardWithSalon": "403",
+    "boardWithKitchen1": "200",
+    "orderCrossKitchenDenied": "403",
+    "ticketCrossKitchenDenied": "403",
+    "itemCrossKitchenDenied": "403",
+    "acknowledgeWithKitchenDenied": "403",
+    "catalogGetUnauthorized": "401",
+    "catalogGetKitchen1Forbidden": "403",
+    "catalogPostSalonForbidden": "403",
+    "catalogProviderPullKitchen2Forbidden": "403",
+    "logoutSalon": "204",
+    "salonAfterLogout": "401"
+  },
+  "responseBodies": {
+    "boardUnauthorized": "\"Unauthorized\"",
+    "invalidPin": "\"Invalid area PIN\"",
+    "orderCrossKitchenDenied": "\"Forbidden\"",
+    "catalogGetUnauthorized": "\"Unauthorized\"",
+    "catalogGetKitchen1Forbidden": "\"Forbidden\""
+  },
+  "redirects": {
+    "accessWithKitchen1Session": "/",
+    "salonWithKitchen1Session": "/",
+    "catalogWithSalonSession": "/salon"
+  },
+  "payloadChecks": {
+    "boardKitchenCount": 2,
+    "orderCanonicalFocusKitchenId": "kitchen-1",
+    "salonHasNoKitchensField": true,
+    "salonHasNoSyncAlertsField": true,
+    "kitchen2TicketStatusBeforeDeniedMutation": "new",
+    "kitchen2TicketStatusAfterDeniedMutation": "new",
+    "kitchen2ItemStatusBeforeDeniedMutation": "new",
+    "kitchen2ItemStatusAfterDeniedMutation": "new",
+    "openSalonExceptionCount": 1
+  }
+}

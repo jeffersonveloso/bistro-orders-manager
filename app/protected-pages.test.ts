@@ -61,7 +61,7 @@ function createRuntimeConfig(): AreaAccessRuntimeConfig {
 function createCookieStore(
   config: AreaAccessRuntimeConfig,
   areaId?: AreaId,
-  expiresAt = "2026-05-13T16:00:00.000Z",
+  expiresAt = "2099-12-31T23:59:59.000Z",
 ): { get(name: string): { value: string } | undefined } {
   return {
     get(name: string) {

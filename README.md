@@ -30,6 +30,12 @@ Phase 1 of the live rollout now adds a real external sync boundary for **Anota A
   - post-import external changes
   - external cancellations
   - technical ingestion failures
+- Area-based access entry at `/access` with environment-backed PINs for `Kitchen 1`, `Kitchen 2`, and `Salão`
+- Protected operational pages redirect unauthenticated devices to `/access`
+- Wrong-area page access is canonicalized server-side:
+  - kitchen sessions stay on `/` or `/orders/[orderId]?kitchen=<their-kitchen>`
+  - salão sessions stay on `/salon`
+- `/catalog` is currently deferred for operational areas and redirects authenticated kitchen or salão sessions back to their canonical home surface
 - Fast operational actions:
   - start kitchen
   - mark item in preparation
@@ -109,16 +115,28 @@ Mode selection:
 
 Runtime contract for live mode:
 
-- `BISTRO_ANOTA_WEBHOOK_SECRET` protects `POST /api/integrations/anota-ai/webhook` through header `x-bistro-anota-webhook-secret`
+- `BISTRO_ANOTA_WEBHOOK_SECRET` protects `POST /api/integrations/anota-ai/webhook` through `Authorization: Bearer <secret>` and still accepts `x-bistro-anota-webhook-secret` for local/manual compatibility
 - `BISTRO_INTERNAL_SYNC_SECRET` protects `POST /api/internal/sync/anota-ai` through header `x-bistro-internal-sync-secret`
 - `BISTRO_ANOTA_AI_BASE_URL` is optional; the adapter defaults to `https://api-parceiros.anota.ai/partnerauth`
+- `BISTRO_ANOTA_AI_CATALOG_BASE_URL` is optional; the catalog admin adapter defaults to `https://api-menu.anota.ai/partnerauth`
+- `BISTRO_ANOTA_AI_CATALOG_LIST_PATH` is optional; the catalog admin adapter defaults to `v2/nm-category/rest/simple-item/export/v2`
 - `BISTRO_DATABASE_PATH` is optional and useful for isolated QA or pilot databases
-- provider catalog `externalID` / `external_id` must map directly to the local `menu_item_id`
+- provider catalog `externalID` / `external_id` must match a stored local mapping binding; `menu_item_id` remains the Bistro-owned identifier, `provider_external_id` stores the provider-facing routing key, and `provider_item_id` stores the provider internal catalog item id when known
+- during order import, the sync path prefers `externalID` and can fall back to a stored `provider_item_id` when the provider omits `externalID` on the order line but still exposes the catalog item id
 - if any live provider item has no usable local mapping, the order fails closed and opens a sync exception instead of falling back to item names
+
+Catalog maintenance:
+
+- `/catalog` and `/api/catalog/*` are currently deferred for all operational area sessions (`kitchen-1`, `kitchen-2`, `salon`)
+- the live adapter still depends on pre-existing local `menu item -> kitchen` mappings, but those bindings must currently be loaded out-of-band through direct data work or a future admin or manager surface
+- the provider pull still reads the provider catalog directly; for Anota AI it uses the category export endpoint on `api-menu.anota.ai`
+- when a provider item arrives without `externalID`, the planned UUID-draft and provider `api_write` assistance remain admin-oriented capabilities and are not available from the current operational area matrix
+- Phase 1 does not auto-activate unmapped items into production; items without provider `externalID` remain blocked until that key is configured upstream
 
 Operational docs:
 
 - [docs/live-integration-phase-1.md](docs/live-integration-phase-1.md)
+- [docs/anota-ai-smoke-test.md](docs/anota-ai-smoke-test.md)
 - [qa/live-integration-post-qa-checklist.md](qa/live-integration-post-qa-checklist.md)
 
 ## Local Data
@@ -134,27 +152,37 @@ Override it with `BISTRO_DATABASE_PATH` when you need an isolated file for QA, E
 On startup it will:
 
 1. create tables if needed
-2. seed kitchens and menu item mappings
-3. in `mock` mode, import demo orders through the mock provider adapter
+2. seed kitchens
+3. in `mock` mode, seed demo menu item mappings and import demo orders through the mock provider adapter
 4. in `mock` mode, apply demo operational scenarios and demo sync exceptions for acceptance coverage
 
 Boot behavior by provider mode:
 
-- `mock`: seeds demo production data for local walkthroughs and acceptance coverage
-- `anota_ai`: keeps only kitchens and menu mappings seeded so live or fake-provider sync can populate the board
+- `mock`: seeds demo mappings plus demo production data for local walkthroughs and acceptance coverage
+- `anota_ai`: keeps only kitchens seeded; catalog mappings must be created intentionally through direct data load or a future admin surface before live imports succeed
 
 ## Routes
 
 - `/`
-  - kitchen sync board
+  - protected kitchen sync board
+- `/access`
+  - area selection, PIN entry, and area session bootstrap
 - `/orders/[orderId]?kitchen=kitchen-1`
-  - full-screen order detail focused on one kitchen
+  - protected full-screen order detail focused on the authenticated kitchen
 - `/salon`
-  - read-only salão summary
+  - protected read-only salão summary
+- `/catalog`
+  - deferred in the current operational area matrix; authenticated operational areas are redirected away from this page
 - `/api/board`
-  - production board payload
+  - protected kitchen-only board payload
 - `/api/orders/[orderId]`
-  - order detail payload
+  - protected kitchen-only order detail payload
+- `/api/salon`
+  - protected salão-only summary payload
+- `/api/catalog/mappings`
+  - protected catalog mapping endpoint; current operational areas receive `401/403`
+- `/api/catalog/provider-pull`
+  - protected provider-catalog pull endpoint; current operational areas receive `401/403`
 - `/api/integrations/anota-ai/webhook`
   - provider-facing Phase 1 intake
 - `/api/internal/sync/anota-ai`
@@ -176,15 +204,43 @@ Start the local demo server:
 npm run dev
 ```
 
+To use the operator entry flow at `/access`, create `.env.local` with the area-session contract before booting the app:
+
+```bash
+BISTRO_ACCESS_SESSION_SECRET=replace-with-a-long-random-secret
+BISTRO_ACCESS_PIN_KITCHEN_1=1111
+BISTRO_ACCESS_PIN_KITCHEN_2=2222
+BISTRO_ACCESS_PIN_SALON=3333
+# optional
+BISTRO_ACCESS_SESSION_TTL_HOURS=16
+```
+
 Open:
 
 ```bash
 http://localhost:3000
 ```
 
+Recommended operator path:
+
+```bash
+http://localhost:3000/access
+```
+
+Notes:
+
+- `/access` shows a configuration warning and `POST /api/access/session` returns `503` until the access env vars above are present.
+- Operational pages now enforce the area session in the App Router itself, so the intended operator flow starts at `/access` even in local development.
+
 If you want to exercise the Phase 1 live adapter locally, create `.env.local` with the real-integration contract before booting the app:
 
 ```bash
+BISTRO_ACCESS_SESSION_SECRET=replace-with-a-long-random-secret
+BISTRO_ACCESS_PIN_KITCHEN_1=1111
+BISTRO_ACCESS_PIN_KITCHEN_2=2222
+BISTRO_ACCESS_PIN_SALON=3333
+# optional
+BISTRO_ACCESS_SESSION_TTL_HOURS=16
 BISTRO_ORDER_SYNC_PROVIDER_MODE=anota_ai
 BISTRO_ANOTA_AI_TOKEN=replace-me
 BISTRO_ANOTA_WEBHOOK_SECRET=replace-me
@@ -195,7 +251,7 @@ BISTRO_ANOTA_AI_BASE_URL=https://api-parceiros.anota.ai/partnerauth
 BISTRO_DATABASE_PATH=data/bistro-production.live.sqlite
 ```
 
-Do not switch to `anota_ai` until the provider catalog `externalID` values match the local kitchen mapping keys and the operator secrets are provisioned.
+Do not switch to `anota_ai` until the provider catalog `externalID` values are bound in the local mapping table through a direct data load or future admin surface, and the operator secrets are provisioned.
 
 ## Validation
 
@@ -207,6 +263,11 @@ npm run test:run -- --coverage
 npm run build
 npm run test:e2e
 ```
+
+Validation notes:
+
+- `npm run test:e2e` is the seeded browser regression suite for the local kitchen MVP. The Playwright web server forces `BISTRO_ORDER_SYNC_PROVIDER_MODE=mock` and an isolated SQLite file so the suite stays stable even when `.env.local` is configured for `anota_ai`.
+- Phase 1 adapter validation is tracked separately in [docs/anota-ai-smoke-test.md](docs/anota-ai-smoke-test.md), [docs/live-integration-phase-1.md](docs/live-integration-phase-1.md), and [qa/verification-report.md](qa/verification-report.md).
 
 Current automated coverage includes:
 
@@ -220,8 +281,9 @@ Current automated coverage includes:
 ## What Is Mocked
 
 - `mock` remains the default provider mode for local development and seed scenarios
-- live Anota AI credentials, webhook delivery, scheduler cadence, and pilot operator runbooks still require runtime verification in task 09
-- internal user authentication and permissions are not implemented
+- local Phase 1 QA against the real `anota_ai` adapter is documented in [qa/verification-report.md](qa/verification-report.md)
+- live tenant credential ownership, provider-delivered webhooks, scheduler cadence, and pilot operator runbooks remain operator-side follow-up items tracked in [qa/live-integration-post-qa-checklist.md](qa/live-integration-post-qa-checklist.md)
+- individual user accounts, manager overrides, and credential-management UI are not implemented
 - real-time transport is not implemented; polling via TanStack Query is used for kitchen and salão synchronization
 
 In Phase 1 live mode, unmapped provider items are **not skipped**. Missing provider catalog `externalID` or missing local kitchen mapping blocks the entire order and opens a `missing_mapping` exception.

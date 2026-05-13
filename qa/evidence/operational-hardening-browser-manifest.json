@@ -1,0 +1,46 @@
+{
+  "baseUrl": "http://127.0.0.1:3100",
+  "flows": [
+    {
+      "name": "access-tablet",
+      "viewport": "768x1024",
+      "entryUrl": "/access",
+      "finalUrl": "/access",
+      "screenshot": "qa/screenshots/oh-access-tablet.png",
+      "verdict": "PASS"
+    },
+    {
+      "name": "board-kitchen-1-desktop",
+      "viewport": "1440x1100",
+      "entryUrl": "/",
+      "finalUrl": "/",
+      "screenshot": "qa/screenshots/oh-board-kitchen-1-desktop.png",
+      "verdict": "PASS"
+    },
+    {
+      "name": "order-detail-kitchen-1-desktop",
+      "viewport": "1440x1100",
+      "entryUrl": "/orders/order_anota-101",
+      "finalUrl": "/orders/order_anota-101?kitchen=kitchen-1",
+      "screenshot": "qa/screenshots/oh-order-detail-kitchen-1-desktop.png",
+      "verdict": "PASS"
+    },
+    {
+      "name": "salon-desktop",
+      "viewport": "1440x1100",
+      "entryUrl": "/salon",
+      "finalUrl": "/salon",
+      "screenshot": "qa/screenshots/oh-salon-desktop.png",
+      "verdict": "PASS"
+    },
+    {
+      "name": "catalog-redirect-salon-desktop",
+      "viewport": "1440x1100",
+      "entryUrl": "/catalog",
+      "finalUrl": "/salon",
+      "screenshot": "qa/screenshots/oh-catalog-redirect-salon-desktop.png",
+      "verdict": "PASS"
+    }
+  ],
+  "note": "Screenshots regenerated with injected session cookies after the UI-login capture produced stale access-screen images."
+}
