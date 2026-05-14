@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
+  ArrowUpRight,
   CheckCheck,
   ChefHat,
   Eye,
@@ -230,6 +231,12 @@ export function OrderDetailClient({
                 >
                   <ArrowLeft className="size-4" />
                   Voltar ao painel
+                </Link>
+              </Button>
+              <Button asChild data-testid="open-catalog-action" size="sm" variant="secondary">
+                <Link href="/catalog">
+                  Catálogo
+                  <ArrowUpRight className="size-4" />
                 </Link>
               </Button>
               <AreaSwitchButton />

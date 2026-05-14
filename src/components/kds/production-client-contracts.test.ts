@@ -82,7 +82,7 @@ describe("production client contracts", () => {
     ]);
   });
 
-  it("does not render shortcuts to deferred or wrong-area surfaces on the dashboard", () => {
+  it("keeps catalog access on the dashboard without rendering wrong-area shortcuts", () => {
     const context = createProductionTestContext({
       applyDemoScenarios: true,
       importProviderOrders: true,
@@ -96,7 +96,7 @@ describe("production client contracts", () => {
         }),
       );
 
-      expect(markup).not.toContain("/catalog");
+      expect(markup).toContain("/catalog");
       expect(markup).not.toContain("/salon");
     } finally {
       context.close();
@@ -140,7 +140,9 @@ describe("production client contracts", () => {
       );
 
       expect(dashboardMarkup).toContain('data-testid="switch-area-action"');
+      expect(dashboardMarkup).toContain('data-testid="open-catalog-action"');
       expect(salonMarkup).toContain('data-testid="switch-area-action"');
+      expect(orderDetailMarkup).toContain('data-testid="open-catalog-action"');
       expect(orderDetailMarkup).toContain('data-testid="switch-area-action"');
       expect(orderDetailMarkup).toContain(
         'data-testid="order-detail-toggle-other-kitchen"',

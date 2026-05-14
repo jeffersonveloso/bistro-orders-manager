@@ -35,7 +35,7 @@ Phase 1 of the live rollout now adds a real external sync boundary for **Anota A
 - Wrong-area page access is canonicalized server-side:
   - kitchen sessions stay on `/` or `/orders/[orderId]?kitchen=<their-kitchen>`
   - salão sessions stay on `/salon`
-- `/catalog` is currently deferred for operational areas and redirects authenticated kitchen or salão sessions back to their canonical home surface
+- `/catalog` is available to `Kitchen 1` and `Kitchen 2` for catalog mapping maintenance; salão sessions are redirected back to `/salon`
 - Fast operational actions:
   - start kitchen
   - mark item in preparation
@@ -127,10 +127,11 @@ Runtime contract for live mode:
 
 Catalog maintenance:
 
-- `/catalog` and `/api/catalog/*` are currently deferred for all operational area sessions (`kitchen-1`, `kitchen-2`, `salon`)
-- the live adapter still depends on pre-existing local `menu item -> kitchen` mappings, but those bindings must currently be loaded out-of-band through direct data work or a future admin or manager surface
+- `/catalog`, `/api/catalog/mappings`, and `/api/catalog/provider-pull` are available to kitchen sessions (`kitchen-1`, `kitchen-2`)
+- salão sessions remain blocked from catalog maintenance surfaces and are redirected or rejected by the access matrix
+- the live adapter still depends on explicit local `menu item -> kitchen` mappings, which can now be maintained from the kitchen-facing catalog surface
 - the provider pull still reads the provider catalog directly; for Anota AI it uses the category export endpoint on `api-menu.anota.ai`
-- when a provider item arrives without `externalID`, the planned UUID-draft and provider `api_write` assistance remain admin-oriented capabilities and are not available from the current operational area matrix
+- when a provider item arrives without `externalID`, the UUID-draft and provider `api_write` assistance are available through the kitchen-facing catalog workflow when the provider capability supports them
 - Phase 1 does not auto-activate unmapped items into production; items without provider `externalID` remain blocked until that key is configured upstream
 
 Operational docs:
@@ -159,7 +160,7 @@ On startup it will:
 Boot behavior by provider mode:
 
 - `mock`: seeds demo mappings plus demo production data for local walkthroughs and acceptance coverage
-- `anota_ai`: keeps only kitchens seeded; catalog mappings must be created intentionally through direct data load or a future admin surface before live imports succeed
+- `anota_ai`: keeps only kitchens seeded; catalog mappings must be created intentionally through `/catalog` before live imports succeed
 
 ## Routes
 
@@ -172,7 +173,7 @@ Boot behavior by provider mode:
 - `/salon`
   - protected read-only salão summary
 - `/catalog`
-  - deferred in the current operational area matrix; authenticated operational areas are redirected away from this page
+  - protected kitchen-only catalog mapping surface
 - `/api/board`
   - protected kitchen-only board payload
 - `/api/orders/[orderId]`
@@ -180,9 +181,9 @@ Boot behavior by provider mode:
 - `/api/salon`
   - protected salão-only summary payload
 - `/api/catalog/mappings`
-  - protected catalog mapping endpoint; current operational areas receive `401/403`
+  - protected kitchen-only catalog mapping endpoint
 - `/api/catalog/provider-pull`
-  - protected provider-catalog pull endpoint; current operational areas receive `401/403`
+  - protected kitchen-only provider-catalog pull endpoint
 - `/api/integrations/anota-ai/webhook`
   - provider-facing Phase 1 intake
 - `/api/internal/sync/anota-ai`
@@ -207,12 +208,7 @@ npm run dev
 To use the operator entry flow at `/access`, create `.env.local` with the area-session contract before booting the app:
 
 ```bash
-BISTRO_ACCESS_SESSION_SECRET=replace-with-a-long-random-secret
-BISTRO_ACCESS_PIN_KITCHEN_1=1111
-BISTRO_ACCESS_PIN_KITCHEN_2=2222
-BISTRO_ACCESS_PIN_SALON=3333
-# optional
-BISTRO_ACCESS_SESSION_TTL_HOURS=16
+cp .env.example .env.local
 ```
 
 Open:
@@ -235,12 +231,12 @@ Notes:
 If you want to exercise the Phase 1 live adapter locally, create `.env.local` with the real-integration contract before booting the app:
 
 ```bash
-BISTRO_ACCESS_SESSION_SECRET=replace-with-a-long-random-secret
-BISTRO_ACCESS_PIN_KITCHEN_1=1111
-BISTRO_ACCESS_PIN_KITCHEN_2=2222
-BISTRO_ACCESS_PIN_SALON=3333
-# optional
-BISTRO_ACCESS_SESSION_TTL_HOURS=16
+cp .env.example .env.local
+```
+
+Then update `.env.local` to at least:
+
+```bash
 BISTRO_ORDER_SYNC_PROVIDER_MODE=anota_ai
 BISTRO_ANOTA_AI_TOKEN=replace-me
 BISTRO_ANOTA_WEBHOOK_SECRET=replace-me

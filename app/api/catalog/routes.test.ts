@@ -162,6 +162,8 @@ function setAccessRuntimeEnv(config: AreaAccessRuntimeConfig) {
     BISTRO_ACCESS_SESSION_SECRET: process.env.BISTRO_ACCESS_SESSION_SECRET,
     BISTRO_ACCESS_SESSION_TTL_HOURS:
       process.env.BISTRO_ACCESS_SESSION_TTL_HOURS,
+    BISTRO_ORDER_SYNC_PROVIDER_MODE:
+      process.env.BISTRO_ORDER_SYNC_PROVIDER_MODE,
   };
 
   process.env.BISTRO_ACCESS_PIN_KITCHEN_1 = config.pins["kitchen-1"];
@@ -169,6 +171,7 @@ function setAccessRuntimeEnv(config: AreaAccessRuntimeConfig) {
   process.env.BISTRO_ACCESS_PIN_SALON = config.pins.salon;
   process.env.BISTRO_ACCESS_SESSION_SECRET = config.sessionSecret;
   process.env.BISTRO_ACCESS_SESSION_TTL_HOURS = String(config.sessionTtlHours);
+  process.env.BISTRO_ORDER_SYNC_PROVIDER_MODE = "mock";
 
   return () => {
     for (const [key, value] of Object.entries(previous)) {
@@ -205,7 +208,7 @@ describe("catalog API route protection", () => {
     expect(repository.listKitchenMappings).not.toHaveBeenCalled();
   });
 
-  it("returns 403 for authenticated kitchen-1 GET /api/catalog/mappings before any catalog payload work runs", async () => {
+  it("allows authenticated kitchen-1 GET /api/catalog/mappings", async () => {
     const config = createRuntimeConfig();
     const repository = createCatalogRepositorySpy();
     const provider = createCatalogAdminProvider({
@@ -225,12 +228,11 @@ describe("catalog API route protection", () => {
       },
     );
 
-    expect(response.status).toBe(403);
-    expect(await response.json()).toBe("Forbidden");
-    expect(provider.listCatalogItems).not.toHaveBeenCalled();
-    expect(repository.listKitchens).not.toHaveBeenCalled();
-    expect(repository.listKitchenMappings).not.toHaveBeenCalled();
-    expect(repository.listProviderOrders).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(provider.listCatalogItems).toHaveBeenCalledWith({ limit: 500 });
+    expect(repository.listKitchens).toHaveBeenCalledTimes(1);
+    expect(repository.listKitchenMappings).toHaveBeenCalled();
+    expect(repository.listProviderOrders).toHaveBeenCalledTimes(1);
   });
 
   it("returns 403 for authenticated salon POST /api/catalog/mappings and does not persist mappings or trigger replay", async () => {
@@ -268,7 +270,7 @@ describe("catalog API route protection", () => {
     }
   });
 
-  it("returns 403 for authenticated kitchen-2 POST /api/catalog/provider-pull without invoking provider pull work", async () => {
+  it("allows authenticated kitchen-2 POST /api/catalog/provider-pull", async () => {
     const config = createRuntimeConfig();
     const provider = createCatalogAdminProvider({
       listCatalogItems: vi.fn(async () => []),
@@ -278,9 +280,9 @@ describe("catalog API route protection", () => {
     } satisfies Pick<CatalogMappingRepository, "listKitchenMappings">;
 
     const response = await handlePostProviderCatalogPullRoute(
-      createRawJsonRequest(
+      createJsonRequest(
         "/api/catalog/provider-pull",
-        "{",
+        {},
         createCookieHeader(config, "kitchen-2"),
       ),
       {
@@ -291,13 +293,15 @@ describe("catalog API route protection", () => {
       },
     );
 
-    expect(response.status).toBe(403);
-    expect(await response.json()).toBe("Forbidden");
-    expect(provider.listCatalogItems).not.toHaveBeenCalled();
-    expect(repository.listKitchenMappings).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(provider.listCatalogItems).toHaveBeenCalledWith({
+      limit: 60,
+      updatedSince: expect.any(String),
+    });
+    expect(repository.listKitchenMappings).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the exported GET /api/catalog/mappings handler behind the auth matrix", async () => {
+  it("keeps the exported GET /api/catalog/mappings handler available to kitchens", async () => {
     const config = createRuntimeConfig();
     const restore = setAccessRuntimeEnv(config);
 
@@ -309,8 +313,7 @@ describe("catalog API route protection", () => {
         ),
       );
 
-      expect(response.status).toBe(403);
-      expect(await response.json()).toBe("Forbidden");
+      expect(response.status).toBe(200);
     } finally {
       restore();
     }
@@ -336,21 +339,20 @@ describe("catalog API route protection", () => {
     }
   });
 
-  it("keeps the exported POST /api/catalog/provider-pull handler behind the auth matrix", async () => {
+  it("keeps the exported POST /api/catalog/provider-pull handler available to kitchens", async () => {
     const config = createRuntimeConfig();
     const restore = setAccessRuntimeEnv(config);
 
     try {
       const response = await postProviderCatalogPullRouteExport(
-        createRawJsonRequest(
+        createJsonRequest(
           "/api/catalog/provider-pull",
-          "{",
+          {},
           createCookieHeader(config, "kitchen-2"),
         ),
       );
 
-      expect(response.status).toBe(403);
-      expect(await response.json()).toBe("Forbidden");
+      expect(response.status).toBe(200);
     } finally {
       restore();
     }

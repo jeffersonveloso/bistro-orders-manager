@@ -621,6 +621,12 @@ export function DashboardClient({
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
+            <Button asChild data-testid="open-catalog-action" variant="secondary">
+              <Link href="/catalog">
+                Catálogo
+                <ArrowUpRight className="size-4" />
+              </Link>
+            </Button>
             <Button
               data-testid="refresh-board"
               variant="secondary"

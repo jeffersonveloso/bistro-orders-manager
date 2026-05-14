@@ -1,7 +1,6 @@
 import {
-  forbiddenAreaResponse,
   type AreaAccessRouteDependencies,
-  withAreaSession,
+  withKitchenArea,
 } from "@/app/api/_lib/area-access-route";
 import { getCatalogExternalIdSupport } from "@/src/application/catalog-provider-assistance-service";
 import type { ProviderSyncService } from "@/src/application/ports";
@@ -98,12 +97,10 @@ export async function handleGetCatalogMappingsRoute(
   request: Request,
   dependencies: CatalogMappingsRouteDependencies = {},
 ) {
-  return withAreaSession(
+  return withKitchenArea(
     request,
     async () => {
-      // Catalog administration stays intentionally deferred for all current
-      // operational areas until a future admin or manager scope exists.
-      return forbiddenAreaResponse();
+      return handleGetCatalogMappings(dependencies);
     },
     dependencies,
   );
@@ -113,12 +110,10 @@ export async function handlePostCatalogMappingRoute(
   request: Request,
   dependencies: CatalogMappingsRouteDependencies = {},
 ) {
-  return withAreaSession(
+  return withKitchenArea(
     request,
     async () => {
-      // Catalog administration stays intentionally deferred for all current
-      // operational areas until a future admin or manager scope exists.
-      return forbiddenAreaResponse();
+      return handlePostCatalogMapping(request, dependencies);
     },
     dependencies,
   );

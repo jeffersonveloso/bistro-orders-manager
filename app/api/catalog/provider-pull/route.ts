@@ -1,7 +1,6 @@
 import {
-  forbiddenAreaResponse,
   type AreaAccessRouteDependencies,
-  withAreaSession,
+  withKitchenArea,
 } from "@/app/api/_lib/area-access-route";
 import type { CatalogAdminProviderPort } from "@/src/application/ports";
 import {
@@ -75,12 +74,10 @@ export async function handlePostProviderCatalogPullRoute(
   request: Request,
   dependencies: ProviderCatalogPullRouteDependencies = {},
 ) {
-  return withAreaSession(
+  return withKitchenArea(
     request,
     async () => {
-      // Catalog administration stays intentionally deferred for all current
-      // operational areas until a future admin or manager scope exists.
-      return forbiddenAreaResponse();
+      return handlePostProviderCatalogPull(request, dependencies);
     },
     dependencies,
   );

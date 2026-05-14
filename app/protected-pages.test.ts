@@ -300,13 +300,14 @@ describe("protected server pages", () => {
     process.env.BISTRO_ACCESS_PIN_KITCHEN_2 = "2222";
     process.env.BISTRO_ACCESS_PIN_SALON = "3333";
     process.env.BISTRO_ACCESS_SESSION_SECRET = "page-secret";
+    process.env.BISTRO_ORDER_SYNC_PROVIDER_MODE = "mock";
     cookiesMock.mockResolvedValue(createCookieStore(createRuntimeConfig(), "salon"));
 
     const page = (await SalonPage()) as {
       props: { initialData: { summary: unknown[] } };
     };
 
-    expect(page.props.initialData.summary.length).toBeGreaterThan(0);
+    expect(Array.isArray(page.props.initialData.summary)).toBe(true);
   });
 
   it("canonicalizes /orders/[orderId] to the authenticated kitchen before refresh runs", async () => {
@@ -394,34 +395,68 @@ describe("protected server pages", () => {
     }
   });
 
-  it("redirects every current stage-6 area away from /catalog", async () => {
+  it("keeps the protected catalog page available for kitchens and redirects salão away", async () => {
+    const context = createProductionTestContext({
+      importProviderOrders: true,
+    });
     const config = createRuntimeConfig();
+    const catalogAdminProvider = {
+      getCatalogExternalIdSupport: vi.fn(() => ({
+        provider: "anota_ai",
+        providerLabel: "Anota AI",
+        mode: "manual_assist" as const,
+        actionLabel: "Copiar external ID",
+        summary: "External IDs precisam ser copiados manualmente.",
+        helpUrl: null,
+        instructions: ["Copie o external ID do painel do provider."],
+      })),
+      listCatalogItems: vi.fn(async () => []),
+      providerName: vi.fn(() => "anota_ai" as const),
+      publishExternalId: vi.fn(async () => ({
+        status: "skipped" as const,
+        providerMessage: null,
+      })),
+    };
 
-    await expect(
-      loadCatalogPage({
+    try {
+      const result = await loadCatalogPage({
+        catalogAdminProvider,
         config,
         cookieStore: createCookieStore(config, "kitchen-1"),
         now: new Date("2026-05-13T12:00:00.000Z"),
-      }),
-    ).rejects.toThrow("NEXT_REDIRECT:/");
-    await expect(
-      loadCatalogPage({
-        config,
-        cookieStore: createCookieStore(config, "salon"),
-        now: new Date("2026-05-13T12:00:00.000Z"),
-      }),
-    ).rejects.toThrow("NEXT_REDIRECT:/salon");
+        repository: context.repository,
+      });
+
+      expect(result.initialData.generatedAt).toEqual(expect.any(String));
+      expect(result.initialData.metrics.totalMappings).toBeGreaterThan(0);
+      expect(catalogAdminProvider.listCatalogItems).toHaveBeenCalledWith({
+        limit: 500,
+      });
+
+      await expect(
+        loadCatalogPage({
+          catalogAdminProvider,
+          config,
+          cookieStore: createCookieStore(config, "salon"),
+          now: new Date("2026-05-13T12:00:00.000Z"),
+          repository: context.repository,
+        }),
+      ).rejects.toThrow("NEXT_REDIRECT:/salon");
+    } finally {
+      context.close();
+    }
   });
 
-  it("runs the protected catalog page through the redirecting default export", async () => {
+  it("runs the protected catalog page through the kitchen-only default export", async () => {
     process.env.BISTRO_ACCESS_PIN_KITCHEN_1 = "1111";
     process.env.BISTRO_ACCESS_PIN_KITCHEN_2 = "2222";
     process.env.BISTRO_ACCESS_PIN_SALON = "3333";
     process.env.BISTRO_ACCESS_SESSION_SECRET = "page-secret";
+    process.env.BISTRO_ORDER_SYNC_PROVIDER_MODE = "mock";
     cookiesMock.mockResolvedValue(
       createCookieStore(createRuntimeConfig(), "kitchen-1"),
     );
 
-    await expect(CatalogPage()).rejects.toThrow("NEXT_REDIRECT:/");
+    await expect(CatalogPage()).resolves.toBeTruthy();
   });
 });

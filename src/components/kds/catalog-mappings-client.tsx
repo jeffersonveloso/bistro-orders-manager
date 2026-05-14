@@ -20,6 +20,7 @@ import type {
   ProviderCatalogPullResult,
   UpsertCatalogMappingResult,
 } from "@/src/application/catalog-mapping-service";
+import { AreaSwitchButton } from "@/src/components/kds/area-switch-button";
 import { Button } from "@/src/components/ui/button";
 import { Card } from "@/src/components/ui/card";
 import { fetchJson } from "@/src/lib/fetch-json";
@@ -605,12 +606,7 @@ export function CatalogMappingsClient({
                 <ArrowUpRight className="size-4" />
               </Link>
             </Button>
-            <Button asChild variant="secondary">
-              <Link href="/salon">
-                Visão do salão
-                <ArrowUpRight className="size-4" />
-              </Link>
-            </Button>
+            <AreaSwitchButton />
           </div>
         </div>
 
