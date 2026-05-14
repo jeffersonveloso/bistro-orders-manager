@@ -868,120 +868,58 @@ export function CatalogMappingsClient({
                 </p>
               </div>
 
-              <ScrollArea className="min-h-0 flex-1" viewportClassName="pr-3">
-                {actionablePendingItems.length === 0 && blockedPendingItems.length === 0 ? (
-                  <div className="rounded-[1.4rem] border border-dashed border-[var(--panel-border-strong)] bg-[var(--panel-elevated)] px-5 py-6 text-sm leading-6 text-[var(--ink-soft)]">
-                    Nenhum item pendente encontrado. Quando um pedido confirmado trouxer
-                    uma chave nova do provider, ele aparecerá aqui.
-                  </div>
-                ) : null}
+              <ScrollArea
+                className="h-[clamp(24rem,calc(100dvh-22rem),42rem)] rounded-[1.6rem] border border-[var(--panel-border)] bg-[var(--panel)] p-1"
+                viewportClassName="pr-3"
+              >
+                <div className="space-y-4 p-2">
+                  {actionablePendingItems.length === 0 && blockedPendingItems.length === 0 ? (
+                    <div className="rounded-[1.4rem] border border-dashed border-[var(--panel-border-strong)] bg-[var(--panel-elevated)] px-5 py-6 text-sm leading-6 text-[var(--ink-soft)]">
+                      Nenhum item pendente encontrado. Quando um pedido confirmado trouxer
+                      uma chave nova do provider, ele aparecerá aqui.
+                    </div>
+                  ) : null}
 
-                {actionablePendingItems.length > 0 ? (
-                  <div className="grid gap-4">
-                    {actionablePendingItems.map((item) => (
-                      <div
-                        className="rounded-[1.5rem] border border-[var(--panel-border)] bg-[rgba(255,255,255,0.92)] p-4"
-                        key={item.key}
-                      >
-                        <div className="flex flex-wrap items-start justify-between gap-4">
-                          <div className="space-y-2">
-                            <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
-                              {item.providerExternalId
-                                ? protectProviderValue(item.providerExternalId)
-                                : "Sem external ID"}
-                            </p>
-                            <h3 className="text-lg font-semibold text-[var(--ink-strong)]">
-                              {item.latestName}
-                            </h3>
-                            <p className="text-sm leading-6 text-[var(--ink-soft)]">
-                              {item.seenOrderCount > 0
-                                ? `Visto em ${item.seenOrderCount} pedido(s). Última leitura ${formatMinutesFrom(item.lastSeenAt)} atrás.`
-                                : `Lido diretamente do catálogo do provider. Última leitura ${formatMinutesFrom(item.lastSeenAt)} atrás.`}
-                            </p>
-                            {item.providerItemId ? (
-                              <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--ink-muted)]">
-                                Item provider: {protectProviderValue(item.providerItemId)}
+                  {actionablePendingItems.length > 0 ? (
+                    <div className="grid gap-4">
+                      {actionablePendingItems.map((item) => (
+                        <div
+                          className="rounded-[1.5rem] border border-[var(--panel-border)] bg-[rgba(255,255,255,0.92)] p-4"
+                          key={item.key}
+                        >
+                          <div className="flex flex-wrap items-start justify-between gap-4">
+                            <div className="space-y-2">
+                              <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
+                                {item.providerExternalId
+                                  ? protectProviderValue(item.providerExternalId)
+                                  : "Sem external ID"}
                               </p>
-                            ) : null}
-                          </div>
+                              <h3 className="text-lg font-semibold text-[var(--ink-strong)]">
+                                {item.latestName}
+                              </h3>
+                              <p className="text-sm leading-6 text-[var(--ink-soft)]">
+                                {item.seenOrderCount > 0
+                                  ? `Visto em ${item.seenOrderCount} pedido(s). Última leitura ${formatMinutesFrom(item.lastSeenAt)} atrás.`
+                                  : `Lido diretamente do catálogo do provider. Última leitura ${formatMinutesFrom(item.lastSeenAt)} atrás.`}
+                              </p>
+                              {item.providerItemId ? (
+                                <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--ink-muted)]">
+                                  Item provider: {protectProviderValue(item.providerItemId)}
+                                </p>
+                              ) : null}
+                            </div>
 
-                          <div className="flex flex-wrap gap-2">
-                            {data.kitchens.map((kitchen) => (
-                              <Button
-                                disabled={
-                                  busyActionKey === `pending:${item.key}:${kitchen.id}`
-                                }
-                                key={kitchen.id}
-                                onClick={() => saveQuickMapping(item, kitchen.id)}
-                                size="sm"
-                              >
-                                {localizeKitchenLabel(kitchen.name)}
-                              </Button>
-                            ))}
-                            <Button
-                              onClick={() => prefillManualForm(item)}
-                              size="sm"
-                              variant="secondary"
-                            >
-                              Revisar no formulário
-                            </Button>
-                          </div>
-                        </div>
-
-                        {item.sourceOrders.length > 0 ? (
-                          <div className="mt-4 flex flex-wrap gap-2">
-                            {item.sourceOrders.map((order) => (
-                              <span
-                                className="rounded-full border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--ink-muted)]"
-                                key={`${item.key}:${order.externalOrderId}`}
-                              >
-                                {order.reference}
-                              </span>
-                            ))}
-                          </div>
-                        ) : null}
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-
-                {blockedPendingItems.length > 0 ? (
-                  <div className={cn("grid gap-4", actionablePendingItems.length > 0 && "mt-4")}>
-                    {blockedPendingItems.map((item) => (
-                      <div
-                        className="rounded-[1.5rem] border border-[color-mix(in_oklab,var(--accent-warm)_42%,white)] bg-[color-mix(in_oklab,var(--accent-warm)_10%,white)] p-4"
-                        key={item.key}
-                      >
-                        <div className="flex items-start gap-3">
-                          <TriangleAlert className="mt-0.5 size-5 text-[color-mix(in_oklab,var(--accent-warm)_84%,black)]" />
-                          <div className="space-y-2">
-                            <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
-                              Sem chave externa utilizável
-                            </p>
-                            <h3 className="text-lg font-semibold text-[var(--ink-strong)]">
-                              {item.latestName}
-                            </h3>
-                            <p className="text-sm leading-6 text-[var(--ink-soft)]">
-                              Este item foi lido no provider sem `externalID`. O
-                              sistema pode gerar agora um ID do bistrô, salvar o
-                              binding local e
-                              {data.providerExternalIdSupport?.mode === "api_write"
-                                ? " tentar publicar esse valor automaticamente no provider."
-                                : " te entregar o valor para publicação manual no provider."}
-                            </p>
                             <div className="flex flex-wrap gap-2">
                               {data.kitchens.map((kitchen) => (
                                 <Button
                                   disabled={
-                                    busyActionKey === `blocked:${item.key}:${kitchen.id}`
+                                    busyActionKey === `pending:${item.key}:${kitchen.id}`
                                   }
                                   key={kitchen.id}
-                                  onClick={() =>
-                                    createProviderDraftForBlockedItem(item, kitchen.id)
-                                  }
+                                  onClick={() => saveQuickMapping(item, kitchen.id)}
                                   size="sm"
                                 >
-                                  Gerar ID para {localizeKitchenLabel(kitchen.name)}
+                                  {localizeKitchenLabel(kitchen.name)}
                                 </Button>
                               ))}
                               <Button
@@ -992,24 +930,91 @@ export function CatalogMappingsClient({
                                 Revisar no formulário
                               </Button>
                             </div>
-                            {item.sourceOrders.length > 0 ? (
+                          </div>
+
+                          {item.sourceOrders.length > 0 ? (
+                            <div className="mt-4 flex flex-wrap gap-2">
+                              {item.sourceOrders.map((order) => (
+                                <span
+                                  className="rounded-full border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--ink-muted)]"
+                                  key={`${item.key}:${order.externalOrderId}`}
+                                >
+                                  {order.reference}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {blockedPendingItems.length > 0 ? (
+                    <div className={cn("grid gap-4", actionablePendingItems.length > 0 && "mt-4")}>
+                      {blockedPendingItems.map((item) => (
+                        <div
+                          className="rounded-[1.5rem] border border-[color-mix(in_oklab,var(--accent-warm)_42%,white)] bg-[color-mix(in_oklab,var(--accent-warm)_10%,white)] p-4"
+                          key={item.key}
+                        >
+                          <div className="flex items-start gap-3">
+                            <TriangleAlert className="mt-0.5 size-5 text-[color-mix(in_oklab,var(--accent-warm)_84%,black)]" />
+                            <div className="space-y-2">
+                              <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
+                                Sem chave externa utilizável
+                              </p>
+                              <h3 className="text-lg font-semibold text-[var(--ink-strong)]">
+                                {item.latestName}
+                              </h3>
+                              <p className="text-sm leading-6 text-[var(--ink-soft)]">
+                                Este item foi lido no provider sem `externalID`. O
+                                sistema pode gerar agora um ID do bistrô, salvar o
+                                binding local e
+                                {data.providerExternalIdSupport?.mode === "api_write"
+                                  ? " tentar publicar esse valor automaticamente no provider."
+                                  : " te entregar o valor para publicação manual no provider."}
+                              </p>
                               <div className="flex flex-wrap gap-2">
-                                {item.sourceOrders.map((order) => (
-                                  <span
-                                    className="rounded-full border border-[color-mix(in_oklab,var(--accent-warm)_42%,white)] bg-white/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[color-mix(in_oklab,var(--accent-warm)_82%,black)]"
-                                    key={`${item.key}:${order.externalOrderId}`}
+                                {data.kitchens.map((kitchen) => (
+                                  <Button
+                                    disabled={
+                                      busyActionKey === `blocked:${item.key}:${kitchen.id}`
+                                    }
+                                    key={kitchen.id}
+                                    onClick={() =>
+                                      createProviderDraftForBlockedItem(item, kitchen.id)
+                                    }
+                                    size="sm"
                                   >
-                                    {order.reference}
-                                  </span>
+                                    Gerar ID para {localizeKitchenLabel(kitchen.name)}
+                                  </Button>
                                 ))}
+                                <Button
+                                  onClick={() => prefillManualForm(item)}
+                                  size="sm"
+                                  variant="secondary"
+                                >
+                                  Revisar no formulário
+                                </Button>
                               </div>
-                            ) : null}
+                              {item.sourceOrders.length > 0 ? (
+                                <div className="flex flex-wrap gap-2">
+                                  {item.sourceOrders.map((order) => (
+                                    <span
+                                      className="rounded-full border border-[color-mix(in_oklab,var(--accent-warm)_42%,white)] bg-white/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[color-mix(in_oklab,var(--accent-warm)_82%,black)]"
+                                      key={`${item.key}:${order.externalOrderId}`}
+                                    >
+                                      {order.reference}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
               </ScrollArea>
             </Card>
 
@@ -1027,8 +1032,11 @@ export function CatalogMappingsClient({
                 </p>
               </div>
 
-              <ScrollArea className="min-h-0 flex-1" viewportClassName="pr-3">
-                <div className="grid gap-3">
+              <ScrollArea
+                className="h-[clamp(24rem,calc(100dvh-22rem),42rem)] rounded-[1.6rem] border border-[var(--panel-border)] bg-[var(--panel)] p-1"
+                viewportClassName="pr-3"
+              >
+                <div className="grid gap-3 p-2">
                   {data.mappings.map((mapping) => (
                     <div
                       className="rounded-[1.35rem] border border-[var(--panel-border)] bg-[rgba(255,255,255,0.9)] px-4 py-4"
