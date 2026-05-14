@@ -4,8 +4,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   ArrowUpRight,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   ChefHat,
   Eye,
   EyeOff,
@@ -116,6 +118,7 @@ interface DashboardPreferences {
   kitchenVisibility?: Partial<Record<KitchenAreaId, boolean>>;
   pageSize?: 4 | 6 | 8;
   referenceFilter?: string;
+  showFilterPanel?: boolean;
   showSyncAlerts?: boolean;
 }
 
@@ -170,6 +173,7 @@ function readDashboardPreferencesFromUrl(): DashboardPreferences | null {
   const customerFilter = searchParams.get("customer");
   const referenceFilter = searchParams.get("reference");
   const pageSize = Number(searchParams.get("pageSize"));
+  const showFilterPanel = searchParams.get("filters");
   const showSyncAlerts = searchParams.get("alerts");
   const visibleColumns = searchParams.get("columns");
   const visibleKitchens = searchParams.get("kitchens");
@@ -184,6 +188,10 @@ function readDashboardPreferencesFromUrl(): DashboardPreferences | null {
 
   if (isAllowedPageSize(pageSize)) {
     preferences.pageSize = pageSize;
+  }
+
+  if (showFilterPanel === "0" || showFilterPanel === "1") {
+    preferences.showFilterPanel = showFilterPanel === "1";
   }
 
   if (showSyncAlerts === "0" || showSyncAlerts === "1") {
@@ -248,6 +256,10 @@ function buildDashboardSearchParams(preferences: DashboardPreferences) {
 
   if (preferences.pageSize && preferences.pageSize !== 4) {
     searchParams.set("pageSize", String(preferences.pageSize));
+  }
+
+  if (preferences.showFilterPanel === false) {
+    searchParams.set("filters", "0");
   }
 
   if (preferences.showSyncAlerts === false) {
@@ -333,6 +345,7 @@ export function DashboardClient({
     Partial<Record<KitchenAreaId, boolean>>
   >({});
   const [showSyncAlerts, setShowSyncAlerts] = useState(true);
+  const [showFilterPanel, setShowFilterPanel] = useState(true);
   const [pageSize, setPageSize] = useState<4 | 6 | 8>(4);
   const [columnPageByKey, setColumnPageByKey] = useState<
     Record<string, number>
@@ -398,6 +411,10 @@ export function DashboardClient({
         setPageSize(preferences.pageSize);
       }
 
+      if (preferences.showFilterPanel !== undefined) {
+        setShowFilterPanel(preferences.showFilterPanel);
+      }
+
       if (preferences.showSyncAlerts !== undefined) {
         setShowSyncAlerts(preferences.showSyncAlerts);
       }
@@ -451,6 +468,7 @@ export function DashboardClient({
       kitchenVisibility,
       pageSize,
       referenceFilter,
+      showFilterPanel,
       showSyncAlerts,
     });
     writeDashboardPreferencesToUrl({
@@ -459,6 +477,7 @@ export function DashboardClient({
       kitchenVisibility,
       pageSize,
       referenceFilter,
+      showFilterPanel,
       showSyncAlerts,
     });
   }, [
@@ -467,6 +486,7 @@ export function DashboardClient({
     kitchenVisibility,
     pageSize,
     referenceFilter,
+    showFilterPanel,
     showSyncAlerts,
   ]);
 
@@ -544,6 +564,7 @@ export function DashboardClient({
         kitchenVisibility,
         pageSize,
         referenceFilter,
+        showFilterPanel,
         showSyncAlerts,
       });
       const search = searchParams.toString();
@@ -666,6 +687,20 @@ export function DashboardClient({
               <span className="rounded-full border border-[var(--panel-border)] bg-white/85 px-4 py-2 font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
                 {visibleTickets.length} ticket(s) visíveis
               </span>
+              <Button
+                aria-expanded={showFilterPanel}
+                data-testid="board-toggle-filters"
+                onClick={() => setShowFilterPanel((current) => !current)}
+                size="sm"
+                variant="secondary"
+              >
+                {showFilterPanel ? (
+                  <ChevronUp className="size-4" />
+                ) : (
+                  <ChevronDown className="size-4" />
+                )}
+                {showFilterPanel ? "Ocultar filtros" : "Mostrar filtros"}
+              </Button>
               {hasActiveFilters ? (
                 <Button
                   onClick={() => {
@@ -682,144 +717,148 @@ export function DashboardClient({
             </div>
           </div>
 
-          <div className="grid gap-3 border-t border-[var(--panel-border)] px-5 py-5 xl:grid-cols-[1fr_1fr_auto_auto_auto]">
-            <label className="space-y-2">
-              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
-                Cliente / mesa
-              </span>
-              <Input
-                data-testid="board-filter-customer"
-                onChange={(event) => setCustomerFilter(event.target.value)}
-                placeholder="Ex.: Mesa 7 ou Carla"
-                value={customerFilter}
-              />
-            </label>
+          {showFilterPanel ? (
+            <>
+              <div className="grid gap-3 border-t border-[var(--panel-border)] px-5 py-5 xl:grid-cols-[1fr_1fr_auto_auto_auto]">
+                <label className="space-y-2">
+                  <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
+                    Cliente / mesa
+                  </span>
+                  <Input
+                    data-testid="board-filter-customer"
+                    onChange={(event) => setCustomerFilter(event.target.value)}
+                    placeholder="Ex.: Mesa 7 ou Carla"
+                    value={customerFilter}
+                  />
+                </label>
 
-            <label className="space-y-2">
-              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
-                Comanda
-              </span>
-              <Input
-                data-testid="board-filter-reference"
-                onChange={(event) => setReferenceFilter(event.target.value)}
-                placeholder="Ex.: 103"
-                value={referenceFilter}
-              />
-            </label>
+                <label className="space-y-2">
+                  <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
+                    Comanda
+                  </span>
+                  <Input
+                    data-testid="board-filter-reference"
+                    onChange={(event) => setReferenceFilter(event.target.value)}
+                    placeholder="Ex.: 103"
+                    value={referenceFilter}
+                  />
+                </label>
 
-            <div className="space-y-2">
-              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
-                Tickets por lista
-              </span>
-              <div className="flex flex-wrap gap-2">
-                {[4, 6, 8].map((size) => (
-                  <Button
-                    className="min-w-14"
-                    data-testid={`board-page-size-${size}`}
-                    key={size}
-                    onClick={() => setPageSize(size as 4 | 6 | 8)}
-                    size="sm"
-                    variant={pageSize === size ? "default" : "secondary"}
-                  >
-                    {size}
-                  </Button>
-                ))}
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
-                Colunas do board
-              </span>
-              <div className="flex flex-wrap gap-2">
-                {availableColumnToggles.map((column) => {
-                  const visible = columnVisibility[column.status];
-
-                  return (
-                    <Button
-                      data-testid={`board-toggle-column-${column.status}`}
-                      key={column.status}
-                      onClick={() =>
-                        setColumnVisibility((current) => ({
-                          ...current,
-                          [column.status]: !current[column.status],
-                        }))
-                      }
-                      size="sm"
-                      variant={visible ? "default" : "secondary"}
-                    >
-                      {visible ? (
-                        <Eye className="size-4" />
-                      ) : (
-                        <EyeOff className="size-4" />
-                      )}
-                      {column.label}
-                    </Button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="flex min-w-[13rem] flex-col items-start gap-2">
-              <span className="block font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
-                Alertas operacionais
-              </span>
-              {board.openSyncExceptions > 0 ? (
-                <Button
-                  data-testid="board-toggle-sync-alerts"
-                  onClick={() => setShowSyncAlerts((current) => !current)}
-                  size="sm"
-                  variant={showSyncAlerts ? "default" : "secondary"}
-                >
-                  {showSyncAlerts ? (
-                    <Eye className="size-4" />
-                  ) : (
-                    <EyeOff className="size-4" />
-                  )}
-                  {showSyncAlerts ? "Ocultar alertas" : "Mostrar alertas"}
-                </Button>
-              ) : (
-                <div className="rounded-full border border-[var(--panel-border)] bg-white/75 px-4 py-2 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--ink-muted)]">
-                  Sem exceções ativas
+                <div className="space-y-2">
+                  <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
+                    Tickets por lista
+                  </span>
+                  <div className="flex flex-wrap gap-2">
+                    {[4, 6, 8].map((size) => (
+                      <Button
+                        className="min-w-14"
+                        data-testid={`board-page-size-${size}`}
+                        key={size}
+                        onClick={() => setPageSize(size as 4 | 6 | 8)}
+                        size="sm"
+                        variant={pageSize === size ? "default" : "secondary"}
+                      >
+                        {size}
+                      </Button>
+                    ))}
+                  </div>
                 </div>
-              )}
-            </div>
-          </div>
 
-          <div className="border-t border-[var(--panel-border)] px-5 py-5">
-            <div className="space-y-2">
-              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
-                Cozinhas no painel
-              </span>
-              <div className="flex flex-wrap gap-2">
-                {prioritizedKitchens.map((kitchen) => {
-                  const visible = kitchenVisibility[kitchen.id] ?? true;
+                <div className="space-y-2">
+                  <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
+                    Colunas do board
+                  </span>
+                  <div className="flex flex-wrap gap-2">
+                    {availableColumnToggles.map((column) => {
+                      const visible = columnVisibility[column.status];
 
-                  return (
+                      return (
+                        <Button
+                          data-testid={`board-toggle-column-${column.status}`}
+                          key={column.status}
+                          onClick={() =>
+                            setColumnVisibility((current) => ({
+                              ...current,
+                              [column.status]: !current[column.status],
+                            }))
+                          }
+                          size="sm"
+                          variant={visible ? "default" : "secondary"}
+                        >
+                          {visible ? (
+                            <Eye className="size-4" />
+                          ) : (
+                            <EyeOff className="size-4" />
+                          )}
+                          {column.label}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="flex min-w-[13rem] flex-col items-start gap-2">
+                  <span className="block font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
+                    Alertas operacionais
+                  </span>
+                  {board.openSyncExceptions > 0 ? (
                     <Button
-                      data-testid={`board-toggle-kitchen-${kitchen.id}`}
-                      key={kitchen.id}
-                      onClick={() =>
-                        setKitchenVisibility((current) => ({
-                          ...current,
-                          [kitchen.id]: !visible,
-                        }))
-                      }
+                      data-testid="board-toggle-sync-alerts"
+                      onClick={() => setShowSyncAlerts((current) => !current)}
                       size="sm"
-                      variant={visible ? "default" : "secondary"}
+                      variant={showSyncAlerts ? "default" : "secondary"}
                     >
-                      {visible ? (
+                      {showSyncAlerts ? (
                         <Eye className="size-4" />
                       ) : (
                         <EyeOff className="size-4" />
                       )}
-                      {localizeKitchenLabel(kitchen.name)}
+                      {showSyncAlerts ? "Ocultar alertas" : "Mostrar alertas"}
                     </Button>
-                  );
-                })}
+                  ) : (
+                    <div className="rounded-full border border-[var(--panel-border)] bg-white/75 px-4 py-2 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--ink-muted)]">
+                      Sem exceções ativas
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          </div>
+
+              <div className="border-t border-[var(--panel-border)] px-5 py-5">
+                <div className="space-y-2">
+                  <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
+                    Cozinhas no painel
+                  </span>
+                  <div className="flex flex-wrap gap-2">
+                    {prioritizedKitchens.map((kitchen) => {
+                      const visible = kitchenVisibility[kitchen.id] ?? true;
+
+                      return (
+                        <Button
+                          data-testid={`board-toggle-kitchen-${kitchen.id}`}
+                          key={kitchen.id}
+                          onClick={() =>
+                            setKitchenVisibility((current) => ({
+                              ...current,
+                              [kitchen.id]: !visible,
+                            }))
+                          }
+                          size="sm"
+                          variant={visible ? "default" : "secondary"}
+                        >
+                          {visible ? (
+                            <Eye className="size-4" />
+                          ) : (
+                            <EyeOff className="size-4" />
+                          )}
+                          {localizeKitchenLabel(kitchen.name)}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : null}
         </Card>
 
         {actionAuthFeedback ? (

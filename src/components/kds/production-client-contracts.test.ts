@@ -141,6 +141,7 @@ describe("production client contracts", () => {
 
       expect(dashboardMarkup).toContain('data-testid="switch-area-action"');
       expect(dashboardMarkup).toContain('data-testid="open-catalog-action"');
+      expect(dashboardMarkup).toContain('data-testid="board-toggle-filters"');
       expect(salonMarkup).toContain('data-testid="switch-area-action"');
       expect(orderDetailMarkup).toContain('data-testid="open-catalog-action"');
       expect(orderDetailMarkup).toContain('data-testid="switch-area-action"');
