@@ -239,7 +239,9 @@ export function OrderDetailClient({
                   <ArrowUpRight className="size-4" />
                 </Link>
               </Button>
-              <AreaSwitchButton />
+              <div className="ml-2 pl-2">
+                <AreaSwitchButton />
+              </div>
             </div>
             <div className="space-y-2">
               <p className="font-mono text-xs uppercase tracking-[0.24em] text-[var(--ink-muted)]">

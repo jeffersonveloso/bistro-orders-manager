@@ -638,7 +638,9 @@ export function DashboardClient({
               />
               Atualizar
             </Button>
-            <AreaSwitchButton />
+            <div className="ml-2 pl-2">
+              <AreaSwitchButton />
+            </div>
           </div>
         </div>
 

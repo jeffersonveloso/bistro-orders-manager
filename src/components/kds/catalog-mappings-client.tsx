@@ -606,7 +606,9 @@ export function CatalogMappingsClient({
                 <ArrowUpRight className="size-4" />
               </Link>
             </Button>
-            <AreaSwitchButton />
+            <div className="ml-2 pl-2">
+              <AreaSwitchButton />
+            </div>
           </div>
         </div>
 
