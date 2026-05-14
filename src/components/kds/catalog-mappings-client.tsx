@@ -532,8 +532,8 @@ export function CatalogMappingsClient({
   }
 
   return (
-    <main className="min-h-screen px-4 py-4 md:px-6 md:py-6 lg:h-dvh lg:overflow-hidden">
-      <div className="mx-auto flex max-w-[1680px] flex-col gap-6 lg:h-full lg:min-h-0 lg:overflow-hidden">
+    <main className="min-h-screen px-4 py-4 md:px-6 md:py-6">
+      <div className="mx-auto flex max-w-[1680px] flex-col gap-6">
         <header className="grid gap-4 rounded-[2.2rem] border border-[var(--panel-border)] bg-[linear-gradient(135deg,rgba(252,245,233,0.92),rgba(255,255,255,0.88))] p-6 shadow-[0_24px_70px_rgba(34,30,25,0.12)] lg:grid-cols-[1.2fr_0.8fr]">
           <div className="space-y-4">
             <div className="flex items-center gap-3">
@@ -613,9 +613,9 @@ export function CatalogMappingsClient({
           </div>
         </div>
 
-        <div className="grid gap-5 lg:min-h-0 lg:flex-1 lg:grid-rows-[minmax(0,0.94fr)_minmax(0,1.06fr)] lg:overflow-hidden">
-          <section className="grid gap-5 lg:min-h-0 lg:grid-cols-[0.88fr_1.12fr] lg:overflow-hidden">
-            <Card className="flex min-h-0 flex-col gap-5 overflow-hidden p-5">
+        <div className="grid gap-5">
+          <section className="grid gap-5 xl:grid-cols-[0.88fr_1.12fr]">
+            <Card className="space-y-5 p-5">
               <div className="space-y-2">
                 <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-[var(--ink-muted)]">
                   Pull manual
@@ -630,59 +630,57 @@ export function CatalogMappingsClient({
                 </p>
               </div>
 
-              <ScrollArea className="min-h-0 flex-1" viewportClassName="pr-3">
-                <div className="rounded-[1.5rem] border border-[var(--panel-border)] bg-[var(--panel-elevated)] p-4">
-                  <div className="flex flex-wrap items-start justify-between gap-4">
-                    <div className="space-y-1">
-                      <p className="font-semibold text-[var(--ink-strong)]">
-                        Janela padrão do MVP
-                      </p>
+              <div className="rounded-[1.5rem] border border-[var(--panel-border)] bg-[var(--panel-elevated)] p-4">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="space-y-1">
+                    <p className="font-semibold text-[var(--ink-strong)]">
+                      Janela padrão do MVP
+                    </p>
+                    <p className="text-sm leading-6 text-[var(--ink-soft)]">
+                      Até 500 itens atualizados nos últimos 7 dias, usando a
+                      capability de catálogo do provider atual.
+                    </p>
+                    {data.providerCatalogStatus.status === "loaded" ? (
                       <p className="text-sm leading-6 text-[var(--ink-soft)]">
-                        Até 500 itens atualizados nos últimos 7 dias, usando a
-                        capability de catálogo do provider atual.
+                        Carga inicial do catálogo:{" "}
+                        {data.providerCatalogStatus.fetchedItemCount} item(ns)
+                        recebido(s) do provider.
                       </p>
-                      {data.providerCatalogStatus.status === "loaded" ? (
-                        <p className="text-sm leading-6 text-[var(--ink-soft)]">
-                          Carga inicial do catálogo:{" "}
-                          {data.providerCatalogStatus.fetchedItemCount} item(ns)
-                          recebido(s) do provider.
-                        </p>
-                      ) : null}
-                    </div>
-                    <Button
-                      disabled={busyActionKey === "provider-pull"}
-                      onClick={() => {
-                        pullMutation.mutate();
-                      }}
-                    >
-                      <CloudDownload className="size-4" />
-                      Puxar do provider
-                    </Button>
+                    ) : null}
                   </div>
-
-                  {pullPreview ? (
-                    <div className="mt-4 rounded-[1.2rem] border border-[var(--panel-border)] bg-[rgba(255,255,255,0.88)] px-4 py-4 text-sm text-[var(--ink-soft)]">
-                      <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
-                        Último pull
-                      </p>
-                      <p className="mt-2 text-[var(--ink-strong)]">
-                        {pullPreview.catalogItemsScanned} item(ns) do catálogo consultado(s) desde{" "}
-                        {new Date(pullPreview.updatedSinceUsed).toLocaleString("pt-BR")}
-                        .
-                      </p>
-                      <p className="mt-1">
-                        {pullPreview.metrics.pendingProviderItems} item(ns) novo(s)
-                        com chave válida e{" "}
-                        {pullPreview.metrics.pendingMissingExternalIdItems} item(ns)
-                        sem `externalID`.
-                      </p>
-                    </div>
-                  ) : null}
+                  <Button
+                    disabled={busyActionKey === "provider-pull"}
+                    onClick={() => {
+                      pullMutation.mutate();
+                    }}
+                  >
+                    <CloudDownload className="size-4" />
+                    Puxar do provider
+                  </Button>
                 </div>
-              </ScrollArea>
+
+                {pullPreview ? (
+                  <div className="mt-4 rounded-[1.2rem] border border-[var(--panel-border)] bg-[rgba(255,255,255,0.88)] px-4 py-4 text-sm text-[var(--ink-soft)]">
+                    <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
+                      Último pull
+                    </p>
+                    <p className="mt-2 text-[var(--ink-strong)]">
+                      {pullPreview.catalogItemsScanned} item(ns) do catálogo consultado(s) desde{" "}
+                      {new Date(pullPreview.updatedSinceUsed).toLocaleString("pt-BR")}
+                      .
+                    </p>
+                    <p className="mt-1">
+                      {pullPreview.metrics.pendingProviderItems} item(ns) novo(s)
+                      com chave válida e{" "}
+                      {pullPreview.metrics.pendingMissingExternalIdItems} item(ns)
+                      sem `externalID`.
+                    </p>
+                  </div>
+                ) : null}
+              </div>
             </Card>
 
-            <Card className="flex min-h-0 flex-col gap-5 overflow-hidden p-5">
+            <Card className="space-y-5 p-5">
               <div className="space-y-2">
                 <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-[var(--ink-muted)]">
                   Cadastro manual
@@ -698,179 +696,177 @@ export function CatalogMappingsClient({
                 </p>
               </div>
 
-              <ScrollArea className="min-h-0 flex-1" viewportClassName="pr-3">
-                <form className="grid gap-4 md:grid-cols-2" onSubmit={submitManualForm}>
-                  <label className="space-y-2 md:col-span-1">
-                    <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
-                      ID local
-                    </span>
-                    <input
-                      className={fieldClassName}
-                      onChange={(event) =>
-                        setManualForm((current) => ({
-                          ...current,
-                          menuItemId: event.target.value,
-                          providerExternalId: linkedDraftIds
-                            ? event.target.value
-                            : current.providerExternalId,
-                        }))
-                      }
-                      placeholder="Opcional. Se vazio, o sistema gera um UUID."
-                      value={manualForm.menuItemId}
-                    />
-                  </label>
+              <form className="grid gap-4 md:grid-cols-2" onSubmit={submitManualForm}>
+                <label className="space-y-2 md:col-span-1">
+                  <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
+                    ID local
+                  </span>
+                  <input
+                    className={fieldClassName}
+                    onChange={(event) =>
+                      setManualForm((current) => ({
+                        ...current,
+                        menuItemId: event.target.value,
+                        providerExternalId: linkedDraftIds
+                          ? event.target.value
+                          : current.providerExternalId,
+                      }))
+                    }
+                    placeholder="Opcional. Se vazio, o sistema gera um UUID."
+                    value={manualForm.menuItemId}
+                  />
+                </label>
 
-                  <label className="space-y-2 md:col-span-1">
-                    <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
-                      ID interno do provider
-                    </span>
-                    <input
-                      className={fieldClassName}
-                      readOnly={providerItemIdLocked}
-                      onChange={(event) =>
-                        setManualForm((current) => ({
-                          ...current,
-                          providerItemId: event.target.value,
-                        }))
-                      }
-                      placeholder="Opcional. Carregado do provider quando disponível."
-                      value={manualForm.providerItemId}
-                    />
-                    <p className="text-xs leading-5 text-[var(--ink-muted)]">
-                      {providerItemIdLocked
-                        ? "Valor identificado no provider. Este campo fica bloqueado para evitar divergência manual."
-                        : "Opcional. Use “Revisar no formulário” para carregar o ID interno do provider quando ele estiver disponível."}
-                    </p>
-                  </label>
+                <label className="space-y-2 md:col-span-1">
+                  <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
+                    ID interno do provider
+                  </span>
+                  <input
+                    className={fieldClassName}
+                    readOnly={providerItemIdLocked}
+                    onChange={(event) =>
+                      setManualForm((current) => ({
+                        ...current,
+                        providerItemId: event.target.value,
+                      }))
+                    }
+                    placeholder="Opcional. Carregado do provider quando disponível."
+                    value={manualForm.providerItemId}
+                  />
+                  <p className="text-xs leading-5 text-[var(--ink-muted)]">
+                    {providerItemIdLocked
+                      ? "Valor identificado no provider. Este campo fica bloqueado para evitar divergência manual."
+                      : "Opcional. Use “Revisar no formulário” para carregar o ID interno do provider quando ele estiver disponível."}
+                  </p>
+                </label>
 
-                  <label className="space-y-2 md:col-span-1">
-                    <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
-                      External ID do provider
-                    </span>
-                    <input
-                      className={fieldClassName}
-                      readOnly={providerExternalIdLocked}
-                      onChange={(event) =>
-                        setManualForm((current) => ({
-                          ...current,
-                          providerExternalId: event.target.value,
-                        }))
-                      }
-                      placeholder="Opcional. Se vazio, o sistema pode gerar um valor local."
-                      value={manualForm.providerExternalId}
-                    />
-                    <p className="text-xs leading-5 text-[var(--ink-muted)]">
-                      {providerExternalIdLocked
-                        ? linkedDraftIds
-                          ? "ID do bistrô gerado para publicação manual. Copie este valor e publique no provider antes ou logo após salvar."
-                          : "External ID já observado no provider. O campo fica bloqueado para evitar sobrescrita acidental."
-                        : "Se o item ainda não tem external ID no provider, o bistrô pode gerar um ID local e publicá-lo manualmente ou por API quando o provider suportar."}
-                    </p>
-                  </label>
+                <label className="space-y-2 md:col-span-1">
+                  <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
+                    External ID do provider
+                  </span>
+                  <input
+                    className={fieldClassName}
+                    readOnly={providerExternalIdLocked}
+                    onChange={(event) =>
+                      setManualForm((current) => ({
+                        ...current,
+                        providerExternalId: event.target.value,
+                      }))
+                    }
+                    placeholder="Opcional. Se vazio, o sistema pode gerar um valor local."
+                    value={manualForm.providerExternalId}
+                  />
+                  <p className="text-xs leading-5 text-[var(--ink-muted)]">
+                    {providerExternalIdLocked
+                      ? linkedDraftIds
+                        ? "ID do bistrô gerado para publicação manual. Copie este valor e publique no provider antes ou logo após salvar."
+                        : "External ID já observado no provider. O campo fica bloqueado para evitar sobrescrita acidental."
+                      : "Se o item ainda não tem external ID no provider, o bistrô pode gerar um ID local e publicá-lo manualmente ou por API quando o provider suportar."}
+                  </p>
+                </label>
 
-                  <label className="space-y-2 md:col-span-1">
-                    <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
-                      Nome local
-                    </span>
-                    <input
-                      className={fieldClassName}
-                      onChange={(event) =>
-                        setManualForm((current) => ({
-                          ...current,
-                          menuItemName: event.target.value,
-                        }))
-                      }
-                      placeholder="Club Sandwich"
-                      value={manualForm.menuItemName}
-                    />
-                  </label>
+                <label className="space-y-2 md:col-span-1">
+                  <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
+                    Nome local
+                  </span>
+                  <input
+                    className={fieldClassName}
+                    onChange={(event) =>
+                      setManualForm((current) => ({
+                        ...current,
+                        menuItemName: event.target.value,
+                      }))
+                    }
+                    placeholder="Club Sandwich"
+                    value={manualForm.menuItemName}
+                  />
+                </label>
 
-                  <label className="space-y-2 md:col-span-1">
-                    <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
-                      Cozinha
-                    </span>
-                    <select
-                      className={fieldClassName}
-                      onChange={(event) =>
-                        setManualForm((current) => ({
-                          ...current,
-                          kitchenId: event.target.value,
-                        }))
-                      }
-                      value={manualForm.kitchenId}
-                    >
-                      {data.kitchens.map((kitchen) => (
-                        <option key={kitchen.id} value={kitchen.id}>
-                          {localizeKitchenLabel(kitchen.name)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                <label className="space-y-2 md:col-span-1">
+                  <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
+                    Cozinha
+                  </span>
+                  <select
+                    className={fieldClassName}
+                    onChange={(event) =>
+                      setManualForm((current) => ({
+                        ...current,
+                        kitchenId: event.target.value,
+                      }))
+                    }
+                    value={manualForm.kitchenId}
+                  >
+                    {data.kitchens.map((kitchen) => (
+                      <option key={kitchen.id} value={kitchen.id}>
+                        {localizeKitchenLabel(kitchen.name)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
-                  <div className="flex items-end gap-3 md:col-span-1">
+                <div className="flex items-end gap-3 md:col-span-1">
+                  <Button
+                    className="w-full"
+                    disabled={busyActionKey === "manual-form"}
+                    type="submit"
+                  >
+                    <WandSparkles className="size-4" />
+                    Salvar mapping
+                  </Button>
+                </div>
+
+                <div className="flex flex-wrap items-end gap-3 md:col-span-1">
+                  {data.providerExternalIdSupport?.mode === "manual_assist" ? (
                     <Button
-                      className="w-full"
                       disabled={busyActionKey === "manual-form"}
-                      type="submit"
+                      onClick={() => generateManualAssistDraftId()}
+                      type="button"
+                      variant="secondary"
                     >
                       <WandSparkles className="size-4" />
-                      Salvar mapping
+                      Gerar ID do bistrô
                     </Button>
-                  </div>
-
-                  <div className="flex flex-wrap items-end gap-3 md:col-span-1">
-                    {data.providerExternalIdSupport?.mode === "manual_assist" ? (
-                      <Button
-                        disabled={busyActionKey === "manual-form"}
-                        onClick={() => generateManualAssistDraftId()}
-                        type="button"
-                        variant="secondary"
-                      >
-                        <WandSparkles className="size-4" />
-                        Gerar ID do bistrô
-                      </Button>
-                    ) : null}
-                    {manualForm.providerExternalId ? (
-                      <Button
-                        disabled={busyActionKey === "manual-form"}
-                        onClick={() => copyManualProviderExternalId()}
-                        type="button"
-                        variant="secondary"
-                      >
-                        <Copy className="size-4" />
-                        Copiar external ID
-                      </Button>
-                    ) : null}
-                  </div>
-
-                  {manualForm.publishProviderExternalId ? (
-                    <div className="md:col-span-2">
-                      <p className="rounded-[1rem] border border-[var(--panel-border)] bg-[var(--panel-elevated)] px-4 py-3 text-sm leading-6 text-[var(--ink-soft)]">
-                        Ao salvar, o sistema também tentará publicar este external ID
-                        no provider usando a capability `api_write`.
-                      </p>
-                    </div>
                   ) : null}
-                </form>
-              </ScrollArea>
+                  {manualForm.providerExternalId ? (
+                    <Button
+                      disabled={busyActionKey === "manual-form"}
+                      onClick={() => copyManualProviderExternalId()}
+                      type="button"
+                      variant="secondary"
+                    >
+                      <Copy className="size-4" />
+                      Copiar external ID
+                    </Button>
+                  ) : null}
+                </div>
+
+                {manualForm.publishProviderExternalId ? (
+                  <div className="md:col-span-2">
+                    <p className="rounded-[1rem] border border-[var(--panel-border)] bg-[var(--panel-elevated)] px-4 py-3 text-sm leading-6 text-[var(--ink-soft)]">
+                      Ao salvar, o sistema também tentará publicar este external ID
+                      no provider usando a capability `api_write`.
+                    </p>
+                  </div>
+                ) : null}
+              </form>
             </Card>
           </section>
 
-          <section className="grid gap-5 lg:min-h-0 lg:grid-cols-[1.15fr_0.85fr] lg:overflow-hidden">
-            <Card className="flex min-h-0 flex-col gap-5 overflow-hidden p-5">
-            <div className="space-y-2">
-              <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-[var(--ink-muted)]">
-                Itens pendentes
-              </p>
-              <h2 className="font-display text-4xl uppercase tracking-[0.08em] text-[var(--ink-strong)]">
-                Sugestões do provider
-              </h2>
-              <p className="text-sm leading-6 text-[var(--ink-soft)]">
-                Estes itens apareceram no provider, mas ainda não têm routing
-                local definido. Se houver `externalID`, o mapping pode ser
-                criado com um clique sem expor o ID bruto como chave local.
-              </p>
-            </div>
+          <section className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
+            <Card className="flex min-h-[34rem] flex-col gap-5 overflow-hidden p-5">
+              <div className="space-y-2">
+                <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-[var(--ink-muted)]">
+                  Itens pendentes
+                </p>
+                <h2 className="font-display text-4xl uppercase tracking-[0.08em] text-[var(--ink-strong)]">
+                  Sugestões do provider
+                </h2>
+                <p className="text-sm leading-6 text-[var(--ink-soft)]">
+                  Estes itens apareceram no provider, mas ainda não têm routing
+                  local definido. Se houver `externalID`, o mapping pode ser
+                  criado com um clique sem expor o ID bruto como chave local.
+                </p>
+              </div>
 
               <ScrollArea className="min-h-0 flex-1" viewportClassName="pr-3">
                 {actionablePendingItems.length === 0 && blockedPendingItems.length === 0 ? (
@@ -1017,7 +1013,7 @@ export function CatalogMappingsClient({
               </ScrollArea>
             </Card>
 
-            <Card className="flex min-h-0 flex-col gap-5 overflow-hidden p-5">
+            <Card className="flex min-h-[34rem] flex-col gap-5 overflow-hidden p-5">
               <div className="space-y-2">
                 <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-[var(--ink-muted)]">
                   Base local
