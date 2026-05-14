@@ -17,6 +17,10 @@ function collectAllowedDevOrigins() {
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: collectAllowedDevOrigins(),
+  output: "standalone",
+  outputFileTracingIncludes: {
+    "/*": ["node_modules/better-sqlite3/**/*"],
+  },
   serverExternalPackages: ["better-sqlite3"],
 };
 

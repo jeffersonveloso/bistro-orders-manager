@@ -264,6 +264,110 @@ npm run build
 npm run test:e2e
 ```
 
+## Docker
+
+Build the production image locally:
+
+```bash
+docker build -t bistro-orders-manager .
+```
+
+Run the container with the minimum access-session contract:
+
+```bash
+docker run --rm -p 3000:3000 \
+  -e BISTRO_ACCESS_SESSION_SECRET=replace-with-a-long-random-secret \
+  -e BISTRO_ACCESS_PIN_KITCHEN_1=1111 \
+  -e BISTRO_ACCESS_PIN_KITCHEN_2=2222 \
+  -e BISTRO_ACCESS_PIN_SALON=3333 \
+  bistro-orders-manager
+```
+
+Container notes:
+
+- the image uses the Next.js standalone output
+- the default provider mode inside the container is `mock`
+- SQLite persists at `/app/data/bistro-production.sqlite` unless `BISTRO_DATABASE_PATH` is overridden
+
+### Docker Compose
+
+The repository now includes [`/docker-compose.yml`](docker-compose.yml) and [`/.env.docker.example`](.env.docker.example).
+
+Recommended setup:
+
+```bash
+cp .env.docker.example .env.docker.homologation
+cp .env.docker.example .env.docker.production
+```
+
+Adjust each file with the correct image tag, secrets, ports, and provider mode.
+
+Suggested environment split:
+
+- homologation:
+  - `BISTRO_IMAGE=your-dockerhub-org/bistro-orders-manager:main-latest`
+  - `BISTRO_CONTAINER_NAME=bistro-orders-manager-homologation`
+  - `BISTRO_PORT=3001`
+  - `BISTRO_DATA_VOLUME=bistro-orders-manager-homologation-data`
+- production:
+  - `BISTRO_IMAGE=your-dockerhub-org/bistro-orders-manager:latest`
+  - `BISTRO_CONTAINER_NAME=bistro-orders-manager-production`
+  - `BISTRO_PORT=3000`
+  - `BISTRO_DATA_VOLUME=bistro-orders-manager-production-data`
+
+Start homologation:
+
+```bash
+docker compose --env-file .env.docker.homologation up -d
+```
+
+Start production:
+
+```bash
+docker compose --env-file .env.docker.production up -d
+```
+
+Update an environment after a new image is published:
+
+```bash
+docker compose --env-file .env.docker.production pull
+docker compose --env-file .env.docker.production up -d
+```
+
+Compose notes:
+
+- the same `docker-compose.yml` serves homologation and production; the env file selects the image tag, runtime secrets, and host port
+- SQLite now persists in a Docker named volume selected by `BISTRO_DATA_VOLUME`, so container recreation or image updates do not remove the database
+- sensitive values stay outside the image and are injected only at container startup
+- if you switch to `BISTRO_ORDER_SYNC_PROVIDER_MODE=anota_ai`, also fill `BISTRO_ANOTA_AI_TOKEN`, `BISTRO_ANOTA_WEBHOOK_SECRET`, and `BISTRO_INTERNAL_SYNC_SECRET`
+- deleting the container does not delete the database; deleting the named volume does
+
+## GitHub Actions
+
+The repository now includes [`/.github/workflows/build.yml`](.github/workflows/build.yml).
+
+On every push to `main`, the workflow:
+
+- installs dependencies with `npm ci`
+- runs `npm run lint`
+- runs `npm run build`
+- uploads the standalone build output as an artifact
+- validates the `Dockerfile` by building the image with Buildx
+- publishes the Docker image to Docker Hub when `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` are configured as GitHub repository secrets
+
+Docker Hub publication contract:
+
+- required secrets:
+  - `DOCKERHUB_USERNAME`
+  - `DOCKERHUB_TOKEN`
+- optional repository variables:
+  - `DOCKERHUB_ORG`
+  - `DOCKERHUB_IMAGE_NAME`
+- generated tags on `main`:
+  - `latest`
+  - `main-latest`
+  - `main-<short-sha>`
+
 Validation notes:
 
 - `npm run test:e2e` is the seeded browser regression suite for the local kitchen MVP. The Playwright web server forces `BISTRO_ORDER_SYNC_PROVIDER_MODE=mock` and an isolated SQLite file so the suite stays stable even when `.env.local` is configured for `anota_ai`.
