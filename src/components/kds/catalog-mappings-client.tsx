@@ -23,6 +23,7 @@ import type {
 import { AreaSwitchButton } from "@/src/components/kds/area-switch-button";
 import { Button } from "@/src/components/ui/button";
 import { Card } from "@/src/components/ui/card";
+import { ScrollArea } from "@/src/components/ui/scroll-area";
 import { fetchJson } from "@/src/lib/fetch-json";
 import { localizeKitchenLabel } from "@/src/lib/kitchen-labels";
 import { cn, formatMinutesFrom } from "@/src/lib/utils";
@@ -531,8 +532,8 @@ export function CatalogMappingsClient({
   }
 
   return (
-    <main className="min-h-screen px-4 py-4 md:px-6 md:py-6">
-      <div className="mx-auto flex max-w-[1680px] flex-col gap-6">
+    <main className="min-h-screen px-4 py-4 md:px-6 md:py-6 lg:h-dvh lg:overflow-hidden">
+      <div className="mx-auto flex max-w-[1680px] flex-col gap-6 lg:h-full lg:min-h-0 lg:overflow-hidden">
         <header className="grid gap-4 rounded-[2.2rem] border border-[var(--panel-border)] bg-[linear-gradient(135deg,rgba(252,245,233,0.92),rgba(255,255,255,0.88))] p-6 shadow-[0_24px_70px_rgba(34,30,25,0.12)] lg:grid-cols-[1.2fr_0.8fr]">
           <div className="space-y-4">
             <div className="flex items-center gap-3">
@@ -612,246 +613,251 @@ export function CatalogMappingsClient({
           </div>
         </div>
 
-        <section className="grid gap-5 xl:grid-cols-[0.88fr_1.12fr]">
-          <Card className="space-y-5 p-5">
-            <div className="space-y-2">
-              <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-[var(--ink-muted)]">
-                Pull manual
-              </p>
-              <h2 className="font-display text-4xl uppercase tracking-[0.08em] text-[var(--ink-strong)]">
-                Buscar itens do catálogo do provider
-              </h2>
-              <p className="text-sm leading-6 text-[var(--ink-soft)]">
-                O pull manual consulta o catálogo do provider atual e retorna
-                itens ainda sem mapping local. Isso permite adiantar o vínculo
-                operacional sem depender de pedidos em aberto.
-              </p>
-            </div>
+        <div className="grid gap-5 lg:min-h-0 lg:flex-1 lg:grid-rows-[minmax(0,0.94fr)_minmax(0,1.06fr)] lg:overflow-hidden">
+          <section className="grid gap-5 lg:min-h-0 lg:grid-cols-[0.88fr_1.12fr] lg:overflow-hidden">
+            <Card className="flex min-h-0 flex-col gap-5 overflow-hidden p-5">
+              <div className="space-y-2">
+                <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-[var(--ink-muted)]">
+                  Pull manual
+                </p>
+                <h2 className="font-display text-4xl uppercase tracking-[0.08em] text-[var(--ink-strong)]">
+                  Buscar itens do catálogo do provider
+                </h2>
+                <p className="text-sm leading-6 text-[var(--ink-soft)]">
+                  O pull manual consulta o catálogo do provider atual e retorna
+                  itens ainda sem mapping local. Isso permite adiantar o vínculo
+                  operacional sem depender de pedidos em aberto.
+                </p>
+              </div>
 
-            <div className="rounded-[1.5rem] border border-[var(--panel-border)] bg-[var(--panel-elevated)] p-4">
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div className="space-y-1">
-                  <p className="font-semibold text-[var(--ink-strong)]">
-                    Janela padrão do MVP
-                  </p>
-                  <p className="text-sm leading-6 text-[var(--ink-soft)]">
-                    Até 500 itens atualizados nos últimos 7 dias, usando a
-                    capability de catálogo do provider atual.
-                  </p>
-                  {data.providerCatalogStatus.status === "loaded" ? (
-                    <p className="text-sm leading-6 text-[var(--ink-soft)]">
-                      Carga inicial do catálogo:{" "}
-                      {data.providerCatalogStatus.fetchedItemCount} item(ns)
-                      recebido(s) do provider.
-                    </p>
+              <ScrollArea className="min-h-0 flex-1" viewportClassName="pr-3">
+                <div className="rounded-[1.5rem] border border-[var(--panel-border)] bg-[var(--panel-elevated)] p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div className="space-y-1">
+                      <p className="font-semibold text-[var(--ink-strong)]">
+                        Janela padrão do MVP
+                      </p>
+                      <p className="text-sm leading-6 text-[var(--ink-soft)]">
+                        Até 500 itens atualizados nos últimos 7 dias, usando a
+                        capability de catálogo do provider atual.
+                      </p>
+                      {data.providerCatalogStatus.status === "loaded" ? (
+                        <p className="text-sm leading-6 text-[var(--ink-soft)]">
+                          Carga inicial do catálogo:{" "}
+                          {data.providerCatalogStatus.fetchedItemCount} item(ns)
+                          recebido(s) do provider.
+                        </p>
+                      ) : null}
+                    </div>
+                    <Button
+                      disabled={busyActionKey === "provider-pull"}
+                      onClick={() => {
+                        pullMutation.mutate();
+                      }}
+                    >
+                      <CloudDownload className="size-4" />
+                      Puxar do provider
+                    </Button>
+                  </div>
+
+                  {pullPreview ? (
+                    <div className="mt-4 rounded-[1.2rem] border border-[var(--panel-border)] bg-[rgba(255,255,255,0.88)] px-4 py-4 text-sm text-[var(--ink-soft)]">
+                      <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
+                        Último pull
+                      </p>
+                      <p className="mt-2 text-[var(--ink-strong)]">
+                        {pullPreview.catalogItemsScanned} item(ns) do catálogo consultado(s) desde{" "}
+                        {new Date(pullPreview.updatedSinceUsed).toLocaleString("pt-BR")}
+                        .
+                      </p>
+                      <p className="mt-1">
+                        {pullPreview.metrics.pendingProviderItems} item(ns) novo(s)
+                        com chave válida e{" "}
+                        {pullPreview.metrics.pendingMissingExternalIdItems} item(ns)
+                        sem `externalID`.
+                      </p>
+                    </div>
                   ) : null}
                 </div>
-                <Button
-                  disabled={busyActionKey === "provider-pull"}
-                  onClick={() => {
-                    pullMutation.mutate();
-                  }}
-                >
-                  <CloudDownload className="size-4" />
-                  Puxar do provider
-                </Button>
-              </div>
+              </ScrollArea>
+            </Card>
 
-              {pullPreview ? (
-                <div className="mt-4 rounded-[1.2rem] border border-[var(--panel-border)] bg-[rgba(255,255,255,0.88)] px-4 py-4 text-sm text-[var(--ink-soft)]">
-                  <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
-                    Último pull
-                  </p>
-                  <p className="mt-2 text-[var(--ink-strong)]">
-                    {pullPreview.catalogItemsScanned} item(ns) do catálogo consultado(s) desde{" "}
-                    {new Date(pullPreview.updatedSinceUsed).toLocaleString("pt-BR")}
-                    .
-                  </p>
-                  <p className="mt-1">
-                    {pullPreview.metrics.pendingProviderItems} item(ns) novo(s)
-                    com chave válida e{" "}
-                    {pullPreview.metrics.pendingMissingExternalIdItems} item(ns)
-                    sem `externalID`.
-                  </p>
-                </div>
-              ) : null}
-            </div>
-          </Card>
-
-          <Card className="space-y-5 p-5">
-            <div className="space-y-2">
-              <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-[var(--ink-muted)]">
-                Cadastro manual
-              </p>
-              <h2 className="font-display text-4xl uppercase tracking-[0.08em] text-[var(--ink-strong)]">
-                Criar ou corrigir mapping
-              </h2>
-              <p className="text-sm leading-6 text-[var(--ink-soft)]">
-                O item local pode ter um UUID interno próprio. Quando houver
-                ID interno do provider ou `externalID`, eles ficam vinculados em
-                campos separados para preservar o identificador operacional do
-                catálogo.
-              </p>
-            </div>
-
-            <form className="grid gap-4 md:grid-cols-2" onSubmit={submitManualForm}>
-              <label className="space-y-2 md:col-span-1">
-                <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
-                  ID local
-                </span>
-                <input
-                  className={fieldClassName}
-                  onChange={(event) =>
-                    setManualForm((current) => ({
-                      ...current,
-                      menuItemId: event.target.value,
-                      providerExternalId: linkedDraftIds
-                        ? event.target.value
-                        : current.providerExternalId,
-                    }))
-                  }
-                  placeholder="Opcional. Se vazio, o sistema gera um UUID."
-                  value={manualForm.menuItemId}
-                />
-              </label>
-
-              <label className="space-y-2 md:col-span-1">
-                <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
-                  ID interno do provider
-                </span>
-                <input
-                  className={fieldClassName}
-                  readOnly={providerItemIdLocked}
-                  onChange={(event) =>
-                    setManualForm((current) => ({
-                      ...current,
-                      providerItemId: event.target.value,
-                    }))
-                  }
-                  placeholder="Opcional. Carregado do provider quando disponível."
-                  value={manualForm.providerItemId}
-                />
-                <p className="text-xs leading-5 text-[var(--ink-muted)]">
-                  {providerItemIdLocked
-                    ? "Valor identificado no provider. Este campo fica bloqueado para evitar divergência manual."
-                    : "Opcional. Use “Revisar no formulário” para carregar o ID interno do provider quando ele estiver disponível."}
+            <Card className="flex min-h-0 flex-col gap-5 overflow-hidden p-5">
+              <div className="space-y-2">
+                <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-[var(--ink-muted)]">
+                  Cadastro manual
                 </p>
-              </label>
-
-              <label className="space-y-2 md:col-span-1">
-                <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
-                  External ID do provider
-                </span>
-                <input
-                  className={fieldClassName}
-                  readOnly={providerExternalIdLocked}
-                  onChange={(event) =>
-                    setManualForm((current) => ({
-                      ...current,
-                      providerExternalId: event.target.value,
-                    }))
-                  }
-                  placeholder="Opcional. Se vazio, o sistema pode gerar um valor local."
-                  value={manualForm.providerExternalId}
-                />
-                <p className="text-xs leading-5 text-[var(--ink-muted)]">
-                  {providerExternalIdLocked
-                    ? linkedDraftIds
-                      ? "ID do bistrô gerado para publicação manual. Copie este valor e publique no provider antes ou logo após salvar."
-                      : "External ID já observado no provider. O campo fica bloqueado para evitar sobrescrita acidental."
-                    : "Se o item ainda não tem external ID no provider, o bistrô pode gerar um ID local e publicá-lo manualmente ou por API quando o provider suportar."}
+                <h2 className="font-display text-4xl uppercase tracking-[0.08em] text-[var(--ink-strong)]">
+                  Criar ou corrigir mapping
+                </h2>
+                <p className="text-sm leading-6 text-[var(--ink-soft)]">
+                  O item local pode ter um UUID interno próprio. Quando houver
+                  ID interno do provider ou `externalID`, eles ficam vinculados em
+                  campos separados para preservar o identificador operacional do
+                  catálogo.
                 </p>
-              </label>
-
-              <label className="space-y-2 md:col-span-1">
-                <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
-                  Nome local
-                </span>
-                <input
-                  className={fieldClassName}
-                  onChange={(event) =>
-                    setManualForm((current) => ({
-                      ...current,
-                      menuItemName: event.target.value,
-                    }))
-                  }
-                  placeholder="Club Sandwich"
-                  value={manualForm.menuItemName}
-                />
-              </label>
-
-              <label className="space-y-2 md:col-span-1">
-                <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
-                  Cozinha
-                </span>
-                <select
-                  className={fieldClassName}
-                  onChange={(event) =>
-                    setManualForm((current) => ({
-                      ...current,
-                      kitchenId: event.target.value,
-                    }))
-                  }
-                  value={manualForm.kitchenId}
-                >
-                  {data.kitchens.map((kitchen) => (
-                    <option key={kitchen.id} value={kitchen.id}>
-                      {localizeKitchenLabel(kitchen.name)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <div className="flex items-end gap-3 md:col-span-1">
-                <Button
-                  className="w-full"
-                  disabled={busyActionKey === "manual-form"}
-                  type="submit"
-                >
-                  <WandSparkles className="size-4" />
-                  Salvar mapping
-                </Button>
               </div>
 
-              <div className="flex flex-wrap items-end gap-3 md:col-span-1">
-                {data.providerExternalIdSupport?.mode === "manual_assist" ? (
-                  <Button
-                    disabled={busyActionKey === "manual-form"}
-                    onClick={() => generateManualAssistDraftId()}
-                    type="button"
-                    variant="secondary"
-                  >
-                    <WandSparkles className="size-4" />
-                    Gerar ID do bistrô
-                  </Button>
-                ) : null}
-                {manualForm.providerExternalId ? (
-                  <Button
-                    disabled={busyActionKey === "manual-form"}
-                    onClick={() => copyManualProviderExternalId()}
-                    type="button"
-                    variant="secondary"
-                  >
-                    <Copy className="size-4" />
-                    Copiar external ID
-                  </Button>
-                ) : null}
-              </div>
+              <ScrollArea className="min-h-0 flex-1" viewportClassName="pr-3">
+                <form className="grid gap-4 md:grid-cols-2" onSubmit={submitManualForm}>
+                  <label className="space-y-2 md:col-span-1">
+                    <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
+                      ID local
+                    </span>
+                    <input
+                      className={fieldClassName}
+                      onChange={(event) =>
+                        setManualForm((current) => ({
+                          ...current,
+                          menuItemId: event.target.value,
+                          providerExternalId: linkedDraftIds
+                            ? event.target.value
+                            : current.providerExternalId,
+                        }))
+                      }
+                      placeholder="Opcional. Se vazio, o sistema gera um UUID."
+                      value={manualForm.menuItemId}
+                    />
+                  </label>
 
-              {manualForm.publishProviderExternalId ? (
-                <div className="md:col-span-2">
-                  <p className="rounded-[1rem] border border-[var(--panel-border)] bg-[var(--panel-elevated)] px-4 py-3 text-sm leading-6 text-[var(--ink-soft)]">
-                    Ao salvar, o sistema também tentará publicar este external ID
-                    no provider usando a capability `api_write`.
-                  </p>
-                </div>
-              ) : null}
-            </form>
-          </Card>
-        </section>
+                  <label className="space-y-2 md:col-span-1">
+                    <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
+                      ID interno do provider
+                    </span>
+                    <input
+                      className={fieldClassName}
+                      readOnly={providerItemIdLocked}
+                      onChange={(event) =>
+                        setManualForm((current) => ({
+                          ...current,
+                          providerItemId: event.target.value,
+                        }))
+                      }
+                      placeholder="Opcional. Carregado do provider quando disponível."
+                      value={manualForm.providerItemId}
+                    />
+                    <p className="text-xs leading-5 text-[var(--ink-muted)]">
+                      {providerItemIdLocked
+                        ? "Valor identificado no provider. Este campo fica bloqueado para evitar divergência manual."
+                        : "Opcional. Use “Revisar no formulário” para carregar o ID interno do provider quando ele estiver disponível."}
+                    </p>
+                  </label>
 
-        <section className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
-          <Card className="space-y-5 p-5">
+                  <label className="space-y-2 md:col-span-1">
+                    <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
+                      External ID do provider
+                    </span>
+                    <input
+                      className={fieldClassName}
+                      readOnly={providerExternalIdLocked}
+                      onChange={(event) =>
+                        setManualForm((current) => ({
+                          ...current,
+                          providerExternalId: event.target.value,
+                        }))
+                      }
+                      placeholder="Opcional. Se vazio, o sistema pode gerar um valor local."
+                      value={manualForm.providerExternalId}
+                    />
+                    <p className="text-xs leading-5 text-[var(--ink-muted)]">
+                      {providerExternalIdLocked
+                        ? linkedDraftIds
+                          ? "ID do bistrô gerado para publicação manual. Copie este valor e publique no provider antes ou logo após salvar."
+                          : "External ID já observado no provider. O campo fica bloqueado para evitar sobrescrita acidental."
+                        : "Se o item ainda não tem external ID no provider, o bistrô pode gerar um ID local e publicá-lo manualmente ou por API quando o provider suportar."}
+                    </p>
+                  </label>
+
+                  <label className="space-y-2 md:col-span-1">
+                    <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
+                      Nome local
+                    </span>
+                    <input
+                      className={fieldClassName}
+                      onChange={(event) =>
+                        setManualForm((current) => ({
+                          ...current,
+                          menuItemName: event.target.value,
+                        }))
+                      }
+                      placeholder="Club Sandwich"
+                      value={manualForm.menuItemName}
+                    />
+                  </label>
+
+                  <label className="space-y-2 md:col-span-1">
+                    <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
+                      Cozinha
+                    </span>
+                    <select
+                      className={fieldClassName}
+                      onChange={(event) =>
+                        setManualForm((current) => ({
+                          ...current,
+                          kitchenId: event.target.value,
+                        }))
+                      }
+                      value={manualForm.kitchenId}
+                    >
+                      {data.kitchens.map((kitchen) => (
+                        <option key={kitchen.id} value={kitchen.id}>
+                          {localizeKitchenLabel(kitchen.name)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <div className="flex items-end gap-3 md:col-span-1">
+                    <Button
+                      className="w-full"
+                      disabled={busyActionKey === "manual-form"}
+                      type="submit"
+                    >
+                      <WandSparkles className="size-4" />
+                      Salvar mapping
+                    </Button>
+                  </div>
+
+                  <div className="flex flex-wrap items-end gap-3 md:col-span-1">
+                    {data.providerExternalIdSupport?.mode === "manual_assist" ? (
+                      <Button
+                        disabled={busyActionKey === "manual-form"}
+                        onClick={() => generateManualAssistDraftId()}
+                        type="button"
+                        variant="secondary"
+                      >
+                        <WandSparkles className="size-4" />
+                        Gerar ID do bistrô
+                      </Button>
+                    ) : null}
+                    {manualForm.providerExternalId ? (
+                      <Button
+                        disabled={busyActionKey === "manual-form"}
+                        onClick={() => copyManualProviderExternalId()}
+                        type="button"
+                        variant="secondary"
+                      >
+                        <Copy className="size-4" />
+                        Copiar external ID
+                      </Button>
+                    ) : null}
+                  </div>
+
+                  {manualForm.publishProviderExternalId ? (
+                    <div className="md:col-span-2">
+                      <p className="rounded-[1rem] border border-[var(--panel-border)] bg-[var(--panel-elevated)] px-4 py-3 text-sm leading-6 text-[var(--ink-soft)]">
+                        Ao salvar, o sistema também tentará publicar este external ID
+                        no provider usando a capability `api_write`.
+                      </p>
+                    </div>
+                  ) : null}
+                </form>
+              </ScrollArea>
+            </Card>
+          </section>
+
+          <section className="grid gap-5 lg:min-h-0 lg:grid-cols-[1.15fr_0.85fr] lg:overflow-hidden">
+            <Card className="flex min-h-0 flex-col gap-5 overflow-hidden p-5">
             <div className="space-y-2">
               <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-[var(--ink-muted)]">
                 Itens pendentes
@@ -866,134 +872,71 @@ export function CatalogMappingsClient({
               </p>
             </div>
 
-            {actionablePendingItems.length === 0 && blockedPendingItems.length === 0 ? (
-              <div className="rounded-[1.4rem] border border-dashed border-[var(--panel-border-strong)] bg-[var(--panel-elevated)] px-5 py-6 text-sm leading-6 text-[var(--ink-soft)]">
-                Nenhum item pendente encontrado. Quando um pedido confirmado trouxer
-                uma chave nova do provider, ele aparecerá aqui.
-              </div>
-            ) : null}
-
-            {actionablePendingItems.length > 0 ? (
-              <div className="grid gap-4">
-                {actionablePendingItems.map((item) => (
-                  <div
-                    className="rounded-[1.5rem] border border-[var(--panel-border)] bg-[rgba(255,255,255,0.92)] p-4"
-                    key={item.key}
-                  >
-                    <div className="flex flex-wrap items-start justify-between gap-4">
-                      <div className="space-y-2">
-                        <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
-                          {item.providerExternalId
-                            ? protectProviderValue(item.providerExternalId)
-                            : "Sem external ID"}
-                        </p>
-                        <h3 className="text-lg font-semibold text-[var(--ink-strong)]">
-                          {item.latestName}
-                        </h3>
-                        <p className="text-sm leading-6 text-[var(--ink-soft)]">
-                          {item.seenOrderCount > 0
-                            ? `Visto em ${item.seenOrderCount} pedido(s). Última leitura ${formatMinutesFrom(item.lastSeenAt)} atrás.`
-                            : `Lido diretamente do catálogo do provider. Última leitura ${formatMinutesFrom(item.lastSeenAt)} atrás.`}
-                        </p>
-                        {item.providerItemId ? (
-                          <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--ink-muted)]">
-                            Item provider: {protectProviderValue(item.providerItemId)}
-                          </p>
-                        ) : null}
-                      </div>
-
-                      <div className="flex flex-wrap gap-2">
-                        {data.kitchens.map((kitchen) => (
-                          <Button
-                            disabled={
-                              busyActionKey === `pending:${item.key}:${kitchen.id}`
-                            }
-                            key={kitchen.id}
-                            onClick={() => saveQuickMapping(item, kitchen.id)}
-                            size="sm"
-                          >
-                            {localizeKitchenLabel(kitchen.name)}
-                          </Button>
-                        ))}
-                        <Button
-                          onClick={() => prefillManualForm(item)}
-                          size="sm"
-                          variant="secondary"
-                        >
-                          Revisar no formulário
-                        </Button>
-                      </div>
-                    </div>
-
-                    {item.sourceOrders.length > 0 ? (
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        {item.sourceOrders.map((order) => (
-                          <span
-                            className="rounded-full border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--ink-muted)]"
-                            key={`${item.key}:${order.externalOrderId}`}
-                          >
-                            {order.reference}
-                          </span>
-                        ))}
-                      </div>
-                    ) : null}
+              <ScrollArea className="min-h-0 flex-1" viewportClassName="pr-3">
+                {actionablePendingItems.length === 0 && blockedPendingItems.length === 0 ? (
+                  <div className="rounded-[1.4rem] border border-dashed border-[var(--panel-border-strong)] bg-[var(--panel-elevated)] px-5 py-6 text-sm leading-6 text-[var(--ink-soft)]">
+                    Nenhum item pendente encontrado. Quando um pedido confirmado trouxer
+                    uma chave nova do provider, ele aparecerá aqui.
                   </div>
-                ))}
-              </div>
-            ) : null}
+                ) : null}
 
-            {blockedPendingItems.length > 0 ? (
-              <div className="grid gap-4">
-                {blockedPendingItems.map((item) => (
-                  <div
-                    className="rounded-[1.5rem] border border-[color-mix(in_oklab,var(--accent-warm)_42%,white)] bg-[color-mix(in_oklab,var(--accent-warm)_10%,white)] p-4"
-                    key={item.key}
-                  >
-                    <div className="flex items-start gap-3">
-                      <TriangleAlert className="mt-0.5 size-5 text-[color-mix(in_oklab,var(--accent-warm)_84%,black)]" />
-                      <div className="space-y-2">
-                        <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
-                          Sem chave externa utilizável
-                        </p>
-                        <h3 className="text-lg font-semibold text-[var(--ink-strong)]">
-                          {item.latestName}
-                        </h3>
-                        <p className="text-sm leading-6 text-[var(--ink-soft)]">
-                          Este item foi lido no provider sem `externalID`. O
-                          sistema pode gerar agora um ID do bistrô, salvar o
-                          binding local e
-                          {data.providerExternalIdSupport?.mode === "api_write"
-                            ? " tentar publicar esse valor automaticamente no provider."
-                            : " te entregar o valor para publicação manual no provider."}
-                        </p>
-                        <div className="flex flex-wrap gap-2">
-                          {data.kitchens.map((kitchen) => (
-                            <Button
-                              disabled={
-                                busyActionKey === `blocked:${item.key}:${kitchen.id}`
-                              }
-                              key={kitchen.id}
-                              onClick={() =>
-                                createProviderDraftForBlockedItem(item, kitchen.id)
-                              }
-                              size="sm"
-                            >
-                              Gerar ID para {localizeKitchenLabel(kitchen.name)}
-                            </Button>
-                          ))}
-                          <Button
-                            onClick={() => prefillManualForm(item)}
-                            size="sm"
-                            variant="secondary"
-                          >
-                            Revisar no formulário
-                          </Button>
-                        </div>
-                        {item.sourceOrders.length > 0 ? (
+                {actionablePendingItems.length > 0 ? (
+                  <div className="grid gap-4">
+                    {actionablePendingItems.map((item) => (
+                      <div
+                        className="rounded-[1.5rem] border border-[var(--panel-border)] bg-[rgba(255,255,255,0.92)] p-4"
+                        key={item.key}
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-4">
+                          <div className="space-y-2">
+                            <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
+                              {item.providerExternalId
+                                ? protectProviderValue(item.providerExternalId)
+                                : "Sem external ID"}
+                            </p>
+                            <h3 className="text-lg font-semibold text-[var(--ink-strong)]">
+                              {item.latestName}
+                            </h3>
+                            <p className="text-sm leading-6 text-[var(--ink-soft)]">
+                              {item.seenOrderCount > 0
+                                ? `Visto em ${item.seenOrderCount} pedido(s). Última leitura ${formatMinutesFrom(item.lastSeenAt)} atrás.`
+                                : `Lido diretamente do catálogo do provider. Última leitura ${formatMinutesFrom(item.lastSeenAt)} atrás.`}
+                            </p>
+                            {item.providerItemId ? (
+                              <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--ink-muted)]">
+                                Item provider: {protectProviderValue(item.providerItemId)}
+                              </p>
+                            ) : null}
+                          </div>
+
                           <div className="flex flex-wrap gap-2">
+                            {data.kitchens.map((kitchen) => (
+                              <Button
+                                disabled={
+                                  busyActionKey === `pending:${item.key}:${kitchen.id}`
+                                }
+                                key={kitchen.id}
+                                onClick={() => saveQuickMapping(item, kitchen.id)}
+                                size="sm"
+                              >
+                                {localizeKitchenLabel(kitchen.name)}
+                              </Button>
+                            ))}
+                            <Button
+                              onClick={() => prefillManualForm(item)}
+                              size="sm"
+                              variant="secondary"
+                            >
+                              Revisar no formulário
+                            </Button>
+                          </div>
+                        </div>
+
+                        {item.sourceOrders.length > 0 ? (
+                          <div className="mt-4 flex flex-wrap gap-2">
                             {item.sourceOrders.map((order) => (
                               <span
-                                className="rounded-full border border-[color-mix(in_oklab,var(--accent-warm)_42%,white)] bg-white/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[color-mix(in_oklab,var(--accent-warm)_82%,black)]"
+                                className="rounded-full border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--ink-muted)]"
                                 key={`${item.key}:${order.externalOrderId}`}
                               >
                                 {order.reference}
@@ -1002,89 +945,157 @@ export function CatalogMappingsClient({
                           </div>
                         ) : null}
                       </div>
-                    </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            ) : null}
-          </Card>
+                ) : null}
 
-          <Card className="space-y-5 p-5">
-            <div className="space-y-2">
-              <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-[var(--ink-muted)]">
-                Base local
-              </p>
-              <h2 className="font-display text-4xl uppercase tracking-[0.08em] text-[var(--ink-strong)]">
-                Mappings atuais
-              </h2>
-              <p className="text-sm leading-6 text-[var(--ink-soft)]">
-                Como existem só duas cozinhas, a troca de linha pode ser feita
-                diretamente nesta lista com reatribuição rápida.
-              </p>
-            </div>
-
-            <div className="grid gap-3">
-              {data.mappings.map((mapping) => (
-                <div
-                  className="rounded-[1.35rem] border border-[var(--panel-border)] bg-[rgba(255,255,255,0.9)] px-4 py-4"
-                  key={mapping.menuItemId}
-                >
-                    <div className="flex flex-wrap items-start justify-between gap-4">
-                      <div>
-                        <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
-                          {mapping.menuItemId}
-                        </p>
-                        <p className="mt-1 text-base font-semibold text-[var(--ink-strong)]">
-                          {mapping.menuItemName}
-                        </p>
-                        <p className="mt-1 text-sm text-[var(--ink-soft)]">
-                          {localizeKitchenLabel(mapping.kitchenName)}
-                        </p>
-                        <p className="mt-1 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--ink-muted)]">
-                          {mapping.providerExternalId
-                            ? protectProviderValue(mapping.providerExternalId)
-                            : "Sem vínculo externo"}
-                        </p>
-                        {mapping.providerItemId ? (
-                          <p className="mt-1 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--ink-muted)]">
-                            Item provider: {protectProviderValue(mapping.providerItemId)}
-                          </p>
-                        ) : null}
+                {blockedPendingItems.length > 0 ? (
+                  <div className={cn("grid gap-4", actionablePendingItems.length > 0 && "mt-4")}>
+                    {blockedPendingItems.map((item) => (
+                      <div
+                        className="rounded-[1.5rem] border border-[color-mix(in_oklab,var(--accent-warm)_42%,white)] bg-[color-mix(in_oklab,var(--accent-warm)_10%,white)] p-4"
+                        key={item.key}
+                      >
+                        <div className="flex items-start gap-3">
+                          <TriangleAlert className="mt-0.5 size-5 text-[color-mix(in_oklab,var(--accent-warm)_84%,black)]" />
+                          <div className="space-y-2">
+                            <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
+                              Sem chave externa utilizável
+                            </p>
+                            <h3 className="text-lg font-semibold text-[var(--ink-strong)]">
+                              {item.latestName}
+                            </h3>
+                            <p className="text-sm leading-6 text-[var(--ink-soft)]">
+                              Este item foi lido no provider sem `externalID`. O
+                              sistema pode gerar agora um ID do bistrô, salvar o
+                              binding local e
+                              {data.providerExternalIdSupport?.mode === "api_write"
+                                ? " tentar publicar esse valor automaticamente no provider."
+                                : " te entregar o valor para publicação manual no provider."}
+                            </p>
+                            <div className="flex flex-wrap gap-2">
+                              {data.kitchens.map((kitchen) => (
+                                <Button
+                                  disabled={
+                                    busyActionKey === `blocked:${item.key}:${kitchen.id}`
+                                  }
+                                  key={kitchen.id}
+                                  onClick={() =>
+                                    createProviderDraftForBlockedItem(item, kitchen.id)
+                                  }
+                                  size="sm"
+                                >
+                                  Gerar ID para {localizeKitchenLabel(kitchen.name)}
+                                </Button>
+                              ))}
+                              <Button
+                                onClick={() => prefillManualForm(item)}
+                                size="sm"
+                                variant="secondary"
+                              >
+                                Revisar no formulário
+                              </Button>
+                            </div>
+                            {item.sourceOrders.length > 0 ? (
+                              <div className="flex flex-wrap gap-2">
+                                {item.sourceOrders.map((order) => (
+                                  <span
+                                    className="rounded-full border border-[color-mix(in_oklab,var(--accent-warm)_42%,white)] bg-white/70 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-[color-mix(in_oklab,var(--accent-warm)_82%,black)]"
+                                    key={`${item.key}:${order.externalOrderId}`}
+                                  >
+                                    {order.reference}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
                       </div>
-
-                    <div className="flex flex-wrap gap-2">
-                      {data.kitchens.map((kitchen) => (
-                        <Button
-                          disabled={
-                            mapping.kitchenId === kitchen.id ||
-                            busyActionKey ===
-                              `existing:${mapping.menuItemId}:${kitchen.id}`
-                          }
-                          key={kitchen.id}
-                          onClick={() =>
-                            saveExistingMapping(
-                              mapping.menuItemId,
-                              mapping.menuItemName,
-                              kitchen.id,
-                            )
-                          }
-                          size="sm"
-                          variant={
-                            mapping.kitchenId === kitchen.id ? "secondary" : "default"
-                          }
-                        >
-                          {mapping.kitchenId === kitchen.id
-                            ? `${localizeKitchenLabel(kitchen.name)} atual`
-                            : localizeKitchenLabel(kitchen.name)}
-                        </Button>
-                      ))}
-                    </div>
+                    ))}
                   </div>
+                ) : null}
+              </ScrollArea>
+            </Card>
+
+            <Card className="flex min-h-0 flex-col gap-5 overflow-hidden p-5">
+              <div className="space-y-2">
+                <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-[var(--ink-muted)]">
+                  Base local
+                </p>
+                <h2 className="font-display text-4xl uppercase tracking-[0.08em] text-[var(--ink-strong)]">
+                  Mappings atuais
+                </h2>
+                <p className="text-sm leading-6 text-[var(--ink-soft)]">
+                  Como existem só duas cozinhas, a troca de linha pode ser feita
+                  diretamente nesta lista com reatribuição rápida.
+                </p>
+              </div>
+
+              <ScrollArea className="min-h-0 flex-1" viewportClassName="pr-3">
+                <div className="grid gap-3">
+                  {data.mappings.map((mapping) => (
+                    <div
+                      className="rounded-[1.35rem] border border-[var(--panel-border)] bg-[rgba(255,255,255,0.9)] px-4 py-4"
+                      key={mapping.menuItemId}
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-4">
+                        <div>
+                          <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
+                            {mapping.menuItemId}
+                          </p>
+                          <p className="mt-1 text-base font-semibold text-[var(--ink-strong)]">
+                            {mapping.menuItemName}
+                          </p>
+                          <p className="mt-1 text-sm text-[var(--ink-soft)]">
+                            {localizeKitchenLabel(mapping.kitchenName)}
+                          </p>
+                          <p className="mt-1 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--ink-muted)]">
+                            {mapping.providerExternalId
+                              ? protectProviderValue(mapping.providerExternalId)
+                              : "Sem vínculo externo"}
+                          </p>
+                          {mapping.providerItemId ? (
+                            <p className="mt-1 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--ink-muted)]">
+                              Item provider: {protectProviderValue(mapping.providerItemId)}
+                            </p>
+                          ) : null}
+                        </div>
+
+                        <div className="flex flex-wrap gap-2">
+                          {data.kitchens.map((kitchen) => (
+                            <Button
+                              disabled={
+                                mapping.kitchenId === kitchen.id ||
+                                busyActionKey ===
+                                  `existing:${mapping.menuItemId}:${kitchen.id}`
+                              }
+                              key={kitchen.id}
+                              onClick={() =>
+                                saveExistingMapping(
+                                  mapping.menuItemId,
+                                  mapping.menuItemName,
+                                  kitchen.id,
+                                )
+                              }
+                              size="sm"
+                              variant={
+                                mapping.kitchenId === kitchen.id ? "secondary" : "default"
+                              }
+                            >
+                              {mapping.kitchenId === kitchen.id
+                                ? `${localizeKitchenLabel(kitchen.name)} atual`
+                                : localizeKitchenLabel(kitchen.name)}
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          </Card>
-        </section>
+              </ScrollArea>
+            </Card>
+          </section>
+        </div>
       </div>
       <CatalogToastViewport onDismiss={dismissToast} toasts={toasts} />
       {publishDraft && data.providerExternalIdSupport && publishDraftDialogOpen ? (
