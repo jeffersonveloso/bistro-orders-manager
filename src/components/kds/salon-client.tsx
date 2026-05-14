@@ -24,6 +24,7 @@ import {
 } from "@/src/components/kds/protected-surface-feedback";
 import { Button } from "@/src/components/ui/button";
 import { Card } from "@/src/components/ui/card";
+import { ScrollArea } from "@/src/components/ui/scroll-area";
 import { fetchJson } from "@/src/lib/fetch-json";
 import { formatOperationalTime } from "@/src/lib/utils";
 
@@ -327,7 +328,7 @@ export function SalonClient({ initialData }: { initialData?: SalonData }) {
 
   return (
     <main className="min-h-screen px-4 py-4 md:px-6 md:py-6">
-      <div className="mx-auto flex max-w-[1480px] flex-col gap-5">
+      <div className="mx-auto flex max-w-[1680px] flex-col gap-5">
         <header className="flex flex-wrap items-end justify-between gap-4 rounded-[2rem] border border-[var(--panel-border)] bg-[linear-gradient(135deg,rgba(255,255,255,0.96),rgba(249,244,235,0.92))] p-6">
           <div>
             <p className="font-mono text-xs uppercase tracking-[0.24em] text-[var(--ink-muted)]">
@@ -358,7 +359,7 @@ export function SalonClient({ initialData }: { initialData?: SalonData }) {
         <section className="grid gap-5 xl:grid-cols-2">
           {laneSections.map((section) => (
             <Card
-              className="overflow-hidden rounded-[2rem] border-[var(--panel-border-strong)] bg-[linear-gradient(180deg,rgba(255,255,255,0.94),rgba(248,240,229,0.98))] p-5"
+              className="flex min-h-[34rem] flex-col overflow-hidden rounded-[2rem] border-[var(--panel-border-strong)] bg-[linear-gradient(180deg,rgba(255,255,255,0.94),rgba(248,240,229,0.98))] p-5"
               data-testid={`salon-section-${section.key.replace("_", "-")}`}
               key={section.key}
             >
@@ -412,27 +413,32 @@ export function SalonClient({ initialData }: { initialData?: SalonData }) {
                 ) : null}
               </div>
 
-              <div className="mt-5 grid gap-3">
-                {section.orders.length === 0 ? (
-                  <div className="rounded-[1.6rem] border border-dashed border-[var(--panel-border)] bg-white/72 px-5 py-10 text-center text-sm text-[var(--ink-soft)]">
-                    {section.presentation.emptyMessage}
-                  </div>
-                ) : (
-                  section.orders.map((order) => (
-                    <SalonOrderCard
-                      busy={busyOrderId === order.orderId}
-                      key={order.orderId}
-                      onAcknowledge={(orderId, exceptionId) =>
-                        acknowledgeMutation.mutate({
-                          orderId,
-                          exceptionId,
-                        })
-                      }
-                      order={order}
-                    />
-                  ))
-                )}
-              </div>
+              <ScrollArea
+                className="mt-5 h-[clamp(24rem,calc(100dvh-20rem),42rem)] rounded-[1.6rem] border border-[var(--panel-border)] bg-[var(--panel)] p-1"
+                viewportClassName="pr-3"
+              >
+                <div className="space-y-3 p-2">
+                  {section.orders.length === 0 ? (
+                    <div className="rounded-[1.6rem] border border-dashed border-[var(--panel-border)] bg-white/72 px-5 py-10 text-center text-sm text-[var(--ink-soft)]">
+                      {section.presentation.emptyMessage}
+                    </div>
+                  ) : (
+                    section.orders.map((order) => (
+                      <SalonOrderCard
+                        busy={busyOrderId === order.orderId}
+                        key={order.orderId}
+                        onAcknowledge={(orderId, exceptionId) =>
+                          acknowledgeMutation.mutate({
+                            orderId,
+                            exceptionId,
+                          })
+                        }
+                        order={order}
+                      />
+                    ))
+                  )}
+                </div>
+              </ScrollArea>
             </Card>
           ))}
         </section>
