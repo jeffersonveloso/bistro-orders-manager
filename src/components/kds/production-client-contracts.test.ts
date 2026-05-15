@@ -188,6 +188,44 @@ describe("production client contracts", () => {
     }
   });
 
+  it("renders item observations on the order-detail surface from the observation field", () => {
+    const context = createProductionTestContext({
+      applyDemoScenarios: true,
+      importProviderOrders: true,
+    });
+
+    try {
+      const orderDetailData = getOrderDetailData(
+        context.repository,
+        "order_anota-101",
+        "kitchen-1",
+      );
+
+      if (!orderDetailData || !orderDetailData.otherKitchen) {
+        throw new Error("Expected mixed-kitchen order detail data for observation regression");
+      }
+
+      orderDetailData.focusItems[0].notes = null;
+      orderDetailData.focusItems[0].observation = "Sem gelo";
+      orderDetailData.otherKitchen.items[0].notes = null;
+      orderDetailData.otherKitchen.items[0].observation = "Aquecer antes de sair";
+
+      const markup = renderClient(
+        createElement(OrderDetailClient, {
+          initialData: orderDetailData,
+          kitchenId: "kitchen-1",
+          orderId: "order_anota-101",
+        }),
+      );
+
+      expect(markup).toContain("Observação");
+      expect(markup).toContain("Sem gelo");
+      expect(markup).toContain("Aquecer antes de sair");
+    } finally {
+      context.close();
+    }
+  });
+
   it("groups the salão queue by preparation and delivery while limiting each section to fifteen orders", () => {
     const initialData = {
       generatedAt: "2026-05-13T12:00:00.000Z",

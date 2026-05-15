@@ -88,6 +88,7 @@ export interface OrderItemPresentation {
   name: string;
   quantity: number;
   notes: string | null;
+  observation?: string | null;
   status: ItemStatus;
   externalStatus: ExternalItemStatusPresentation | null;
 }
@@ -752,6 +753,7 @@ function toOrderItemPresentation(
       name: item.name,
       quantity: item.quantity,
       notes: item.notes,
+      observation: item.notes,
       status: item.status,
       externalStatus: itemStatuses.get(item.id) ?? null,
     }))

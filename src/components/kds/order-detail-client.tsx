@@ -16,7 +16,10 @@ import {
 import Link from "next/link";
 import { useState } from "react";
 
-import type { OrderDetailData } from "@/src/application/production-service";
+import type {
+  OrderDetailData,
+  OrderItemPresentation,
+} from "@/src/application/production-service";
 import { AreaSwitchButton } from "@/src/components/kds/area-switch-button";
 import {
   getDashboardInvalidationKeys,
@@ -95,6 +98,51 @@ function DetailMetaPill({
         {label}
       </span>
       <span className="font-semibold text-[var(--ink-strong)]">{value}</span>
+    </div>
+  );
+}
+
+function getItemObservation(
+  item: Pick<OrderItemPresentation, "notes" | "observation">,
+) {
+  return item.observation ?? item.notes;
+}
+
+function ItemObservationCallout({
+  observation,
+  tone,
+  className,
+}: {
+  observation: string;
+  tone: "light" | "dark";
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "rounded-[1.1rem] border px-3 py-2",
+        tone === "light"
+          ? "border-[var(--panel-border)] bg-white/82"
+          : "border-white/10 bg-white/8",
+        className,
+      )}
+    >
+      <p
+        className={cn(
+          "font-mono text-[10px] uppercase tracking-[0.2em]",
+          tone === "light" ? "text-[var(--ink-muted)]" : "text-white/55",
+        )}
+      >
+        Observação
+      </p>
+      <p
+        className={cn(
+          "mt-1 text-sm leading-6",
+          tone === "light" ? "text-[var(--ink-soft)]" : "text-white/75",
+        )}
+      >
+        {observation}
+      </p>
     </div>
   );
 }
@@ -409,6 +457,7 @@ export function OrderDetailClient({
               {data.focusItems.map((item) => (
                 (() => {
                   const isCanceled = item.externalStatus?.kind === "canceled";
+                  const observation = getItemObservation(item);
 
                   return (
                     <Card
@@ -434,8 +483,11 @@ export function OrderDetailClient({
                           <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
                             Quantidade {item.quantity}
                           </p>
-                          {item.notes ? (
-                            <p className="text-sm text-[var(--ink-soft)]">{item.notes}</p>
+                          {observation ? (
+                            <ItemObservationCallout
+                              observation={observation}
+                              tone="light"
+                            />
                           ) : null}
                           {item.externalStatus?.detail ? (
                             <p
@@ -542,6 +594,7 @@ export function OrderDetailClient({
                 {data.otherKitchen.items.map((item) => (
                   (() => {
                     const isCanceled = item.externalStatus?.kind === "canceled";
+                    const observation = getItemObservation(item);
 
                     return (
                       <div
@@ -595,11 +648,12 @@ export function OrderDetailClient({
                             ) : null}
                           </div>
                         </div>
-                        {item.notes ? (
-                          <>
-                            <Separator className="my-3 bg-white/10" />
-                            <p className="text-sm text-white/70">{item.notes}</p>
-                          </>
+                        {observation ? (
+                          <ItemObservationCallout
+                            className="mt-3"
+                            observation={observation}
+                            tone="dark"
+                          />
                         ) : null}
                       </div>
                     );
