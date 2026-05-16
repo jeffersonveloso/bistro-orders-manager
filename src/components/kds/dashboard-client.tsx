@@ -4,6 +4,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   ArrowUpRight,
+  Bell,
+  BellOff,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -27,12 +29,18 @@ import {
   useRef,
   useState,
 } from "react";
-import type { ComponentType } from "react";
+import type { ComponentType, MutableRefObject } from "react";
 
 import type {
   BoardTicketCard,
   DashboardData,
 } from "@/src/application/production-service";
+import {
+  acknowledgeTrackedKitchenOrder,
+  collectTrackedKitchenOrderIds,
+  diffNewTrackedKitchenOrderIds,
+  mergeTrackedKitchenOrderIds,
+} from "@/src/components/kds/dashboard-notifications";
 import {
   canManageKitchen,
   getBoardQueryOptions,
@@ -42,6 +50,7 @@ import {
   prioritizeKitchens,
 } from "@/src/components/kds/production-client-contracts";
 import { AreaSwitchButton } from "@/src/components/kds/area-switch-button";
+import { ItemQuantityPill } from "@/src/components/kds/item-quantity-pill";
 import {
   ProtectedSurfaceBanner,
   ProtectedSurfaceFallback,
@@ -111,15 +120,121 @@ const boardColumnStatuses = Object.keys(
 ) as BoardColumnStatus[];
 const dashboardPreferencesStorageKey = "bistro-dashboard-preferences";
 const boardColumnMinWidthRem = 22;
+const defaultNewOrderSoundEnabled = true;
 
 interface DashboardPreferences {
   columnVisibility?: Partial<Record<BoardColumnStatus, boolean>>;
   customerFilter?: string;
   kitchenVisibility?: Partial<Record<KitchenAreaId, boolean>>;
+  newOrderSoundEnabled?: boolean;
   pageSize?: 4 | 6 | 8;
   referenceFilter?: string;
   showFilterPanel?: boolean;
   showSyncAlerts?: boolean;
+}
+
+type BrowserAudioContextConstructor = typeof AudioContext;
+type KitchenBellState = "armed" | "pending_gesture" | "unsupported";
+
+function getBrowserAudioContextConstructor() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  return (
+    window.AudioContext ??
+    (
+      window as Window &
+        typeof globalThis & {
+          webkitAudioContext?: BrowserAudioContextConstructor;
+        }
+    ).webkitAudioContext ??
+    null
+  );
+}
+
+async function ensureKitchenBellContext(
+  audioContextRef: MutableRefObject<AudioContext | null>,
+) {
+  const AudioContextConstructor = getBrowserAudioContextConstructor();
+
+  if (!AudioContextConstructor) {
+    return null;
+  }
+
+  const context = audioContextRef.current ?? new AudioContextConstructor();
+  audioContextRef.current = context;
+
+  if (context.state === "suspended") {
+    try {
+      await context.resume();
+    } catch {
+      return null;
+    }
+  }
+
+  return context.state === "running" ? context : null;
+}
+
+async function playKitchenBell(
+  audioContextRef: MutableRefObject<AudioContext | null>,
+) {
+  const context = await ensureKitchenBellContext(audioContextRef);
+
+  if (!context) {
+    return false;
+  }
+
+  const masterGain = context.createGain();
+  masterGain.connect(context.destination);
+  masterGain.gain.setValueAtTime(0.0001, context.currentTime);
+
+  const now = context.currentTime;
+  const steps = [
+    { duration: 0.26, frequency: 1046.5, offset: 0, peak: 0.12 },
+    { duration: 0.32, frequency: 1318.51, offset: 0.14, peak: 0.08 },
+  ];
+
+  for (const step of steps) {
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    const startAt = now + step.offset;
+    const releaseAt = startAt + step.duration;
+
+    oscillator.type = "square";
+    oscillator.frequency.setValueAtTime(step.frequency, startAt);
+    oscillator.connect(gain);
+    gain.connect(masterGain);
+
+    gain.gain.setValueAtTime(0.0001, startAt);
+    gain.gain.exponentialRampToValueAtTime(step.peak, startAt + 0.018);
+    gain.gain.exponentialRampToValueAtTime(0.0001, releaseAt);
+
+    oscillator.start(startAt);
+    oscillator.stop(releaseAt + 0.02);
+    oscillator.onended = () => {
+      oscillator.disconnect();
+      gain.disconnect();
+    };
+  }
+
+  window.setTimeout(() => {
+    masterGain.disconnect();
+  }, 650);
+
+  return true;
+}
+
+function getNewOrderNotificationLabel(count: number) {
+  if (count === 0) {
+    return "Zerado ao abrir o board";
+  }
+
+  if (count === 1) {
+    return "1 novo pedido aguardando leitura";
+  }
+
+  return `${count} novos pedidos aguardando leitura`;
 }
 
 function readDashboardPreferences(): DashboardPreferences | null {
@@ -347,12 +462,102 @@ export function DashboardClient({
   const [showSyncAlerts, setShowSyncAlerts] = useState(true);
   const [showFilterPanel, setShowFilterPanel] = useState(true);
   const [pageSize, setPageSize] = useState<4 | 6 | 8>(4);
+  const [newOrderSoundEnabled, setNewOrderSoundEnabled] = useState(
+    defaultNewOrderSoundEnabled,
+  );
+  const [newOrderNotifications, setNewOrderNotifications] = useState<{
+    kitchenId: KitchenAreaId;
+    orderIds: string[];
+  }>({
+    kitchenId: activeKitchenId,
+    orderIds: [],
+  });
   const [columnPageByKey, setColumnPageByKey] = useState<
     Record<string, number>
   >({});
   const preferencesHydratedRef = useRef(false);
+  const trackedKitchenOrderIdsRef = useRef<string[] | null>(null);
+  const bellAudioContextRef = useRef<AudioContext | null>(null);
+  const pendingBellPlaybackRef = useRef(false);
+  const [kitchenBellState, setKitchenBellState] = useState<KitchenBellState>(
+    "pending_gesture",
+  );
   const deferredCustomerFilter = useDeferredValue(customerFilter);
   const deferredReferenceFilter = useDeferredValue(referenceFilter);
+  const newOrderNotificationIds =
+    newOrderNotifications.kitchenId === activeKitchenId
+      ? newOrderNotifications.orderIds
+      : [];
+
+  function updateNewOrderNotificationIds(
+    updater: string[] | ((currentOrderIds: string[]) => string[]),
+  ) {
+    setNewOrderNotifications((current) => {
+      const currentOrderIds =
+        current.kitchenId === activeKitchenId ? current.orderIds : [];
+      const nextOrderIds =
+        typeof updater === "function" ? updater(currentOrderIds) : updater;
+
+      return {
+        kitchenId: activeKitchenId,
+        orderIds: nextOrderIds,
+      };
+    });
+  }
+
+  async function armKitchenBell(options: { playPreview?: boolean } = {}) {
+    const hasBellSupport = Boolean(getBrowserAudioContextConstructor());
+
+    if (!hasBellSupport) {
+      setKitchenBellState("unsupported");
+      return false;
+    }
+
+    const context = await ensureKitchenBellContext(bellAudioContextRef);
+
+    if (!context) {
+      setKitchenBellState("pending_gesture");
+      return false;
+    }
+
+    setKitchenBellState("armed");
+
+    if (pendingBellPlaybackRef.current || options.playPreview) {
+      pendingBellPlaybackRef.current = false;
+      await playKitchenBell(bellAudioContextRef);
+    }
+
+    return true;
+  }
+
+  async function handleToggleKitchenBell() {
+    if (!newOrderSoundEnabled) {
+      const armed = await armKitchenBell({ playPreview: true });
+      setNewOrderSoundEnabled(true);
+
+      if (!armed) {
+        pendingBellPlaybackRef.current = true;
+      }
+
+      return;
+    }
+
+    if (kitchenBellState === "pending_gesture") {
+      await armKitchenBell({ playPreview: true });
+      return;
+    }
+
+    if (kitchenBellState === "unsupported") {
+      await armKitchenBell({ playPreview: true });
+      return;
+    }
+
+    if (newOrderSoundEnabled) {
+      pendingBellPlaybackRef.current = false;
+      setNewOrderSoundEnabled(false);
+      return;
+    }
+  }
 
   const boardQuery = useQuery(getBoardQueryOptions(initialData));
 
@@ -419,6 +624,10 @@ export function DashboardClient({
         setShowSyncAlerts(preferences.showSyncAlerts);
       }
 
+      if (typeof preferences.newOrderSoundEnabled === "boolean") {
+        setNewOrderSoundEnabled(preferences.newOrderSoundEnabled);
+      }
+
       if (preferences.columnVisibility) {
         setColumnVisibility((current) => {
           const next = { ...current };
@@ -466,6 +675,7 @@ export function DashboardClient({
       columnVisibility,
       customerFilter,
       kitchenVisibility,
+      newOrderSoundEnabled,
       pageSize,
       referenceFilter,
       showFilterPanel,
@@ -475,6 +685,7 @@ export function DashboardClient({
       columnVisibility,
       customerFilter,
       kitchenVisibility,
+      newOrderSoundEnabled,
       pageSize,
       referenceFilter,
       showFilterPanel,
@@ -484,11 +695,97 @@ export function DashboardClient({
     columnVisibility,
     customerFilter,
     kitchenVisibility,
+    newOrderSoundEnabled,
     pageSize,
     referenceFilter,
     showFilterPanel,
     showSyncAlerts,
   ]);
+
+  useEffect(() => {
+    trackedKitchenOrderIdsRef.current = null;
+  }, [activeKitchenId]);
+
+  useEffect(() => {
+    const unlockBell = () => {
+      if (!newOrderSoundEnabled) {
+        return;
+      }
+
+      void armKitchenBell();
+    };
+
+    window.addEventListener("pointerdown", unlockBell, { passive: true });
+    window.addEventListener("keydown", unlockBell);
+
+    return () => {
+      window.removeEventListener("pointerdown", unlockBell);
+      window.removeEventListener("keydown", unlockBell);
+
+      const context = bellAudioContextRef.current;
+      bellAudioContextRef.current = null;
+
+      if (context) {
+        void context.close().catch(() => undefined);
+      }
+    };
+  }, [newOrderSoundEnabled]);
+
+  useEffect(() => {
+    if (!boardQuery.data) {
+      return;
+    }
+
+    const nextTrackedOrderIds = collectTrackedKitchenOrderIds(
+      boardQuery.data,
+      activeKitchenId,
+    );
+    const previousTrackedOrderIds = trackedKitchenOrderIdsRef.current;
+
+    trackedKitchenOrderIdsRef.current = nextTrackedOrderIds;
+
+    if (!previousTrackedOrderIds) {
+      return;
+    }
+
+    const incomingOrderIds = diffNewTrackedKitchenOrderIds(
+      previousTrackedOrderIds,
+      nextTrackedOrderIds,
+    );
+
+    if (incomingOrderIds.length === 0) {
+      return;
+    }
+
+    setNewOrderNotifications((current) => {
+      const currentOrderIds =
+        current.kitchenId === activeKitchenId ? current.orderIds : [];
+
+      return {
+        kitchenId: activeKitchenId,
+        orderIds: mergeTrackedKitchenOrderIds(
+          currentOrderIds,
+          incomingOrderIds,
+        ),
+      };
+    });
+
+    if (newOrderSoundEnabled) {
+      void playKitchenBell(bellAudioContextRef).then((played) => {
+        if (played) {
+          setKitchenBellState("armed");
+          return;
+        }
+
+        pendingBellPlaybackRef.current = true;
+        setKitchenBellState(
+          getBrowserAudioContextConstructor()
+            ? "pending_gesture"
+            : "unsupported",
+        );
+      });
+    }
+  }, [activeKitchenId, boardQuery.data, newOrderSoundEnabled]);
 
   if (boardQuery.isLoading) {
     return (
@@ -555,8 +852,13 @@ export function DashboardClient({
     visibleTickets.map((ticket) => ticket.orderId),
   ).size;
   const visibleKitchenCount = filteredKitchens.length;
+  const newOrderNotificationCount = newOrderNotificationIds.length;
 
   function openTicket(orderId: string) {
+    updateNewOrderNotificationIds((current) =>
+      acknowledgeTrackedKitchenOrder(current, orderId),
+    );
+
     const returnTo = (() => {
       const searchParams = buildDashboardSearchParams({
         columnVisibility,
@@ -634,14 +936,77 @@ export function DashboardClient({
         </header>
 
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="font-mono text-xs uppercase tracking-[0.28em] text-[var(--ink-muted)]">
-            Atualizado em{" "}
-            {formatOperationalTime(board.generatedAt, {
-              includeSeconds: true,
-            })}
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="font-mono text-xs uppercase tracking-[0.28em] text-[var(--ink-muted)]">
+              Atualizado em{" "}
+              {formatOperationalTime(board.generatedAt, {
+                includeSeconds: true,
+              })}
+            </div>
+            <div
+              className={cn(
+                "inline-flex items-center gap-3 rounded-full border px-4 py-2",
+                newOrderNotificationCount > 0
+                  ? "border-[var(--accent-hot)] bg-[color-mix(in_oklab,var(--accent-hot)_14%,white)] text-[var(--accent-hot)]"
+                  : "border-[var(--panel-border)] bg-white/80 text-[var(--ink-muted)]",
+              )}
+              data-testid="board-new-orders-badge"
+            >
+              <Bell
+                className={cn(
+                  "size-4",
+                  newOrderNotificationCount > 0 && "animate-pulse",
+                )}
+              />
+              <span className="font-mono text-[11px] uppercase tracking-[0.2em]">
+                Novos pedidos
+              </span>
+              <span
+                className={cn(
+                  "grid h-6 min-w-6 place-items-center rounded-full px-2 text-xs font-semibold",
+                  newOrderNotificationCount > 0
+                    ? "bg-[var(--accent-hot)] text-white"
+                    : "bg-[var(--panel)] text-[var(--ink-muted)]",
+                )}
+              >
+                {newOrderNotificationCount}
+              </span>
+              <span className="text-xs font-semibold">
+                {getNewOrderNotificationLabel(newOrderNotificationCount)}
+              </span>
+            </div>
+            {newOrderNotificationCount > 0 ? (
+              <Button
+                data-testid="board-clear-order-notifications"
+                onClick={() => updateNewOrderNotificationIds([])}
+                size="sm"
+                variant="ghost"
+              >
+                Zerar avisos
+              </Button>
+            ) : null}
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
+            <Button
+              data-testid="board-toggle-order-bell"
+              onClick={() => void handleToggleKitchenBell()}
+              size="sm"
+              variant={newOrderSoundEnabled ? "default" : "secondary"}
+            >
+              {newOrderSoundEnabled ? (
+                <Bell className="size-4" />
+              ) : (
+                <BellOff className="size-4" />
+              )}
+              {newOrderSoundEnabled
+                ? kitchenBellState === "unsupported"
+                  ? "Som indisponível"
+                  : kitchenBellState === "pending_gesture"
+                    ? "Toque para armar"
+                    : "Campainha ativa"
+                : "Campainha desligada"}
+            </Button>
             <Button asChild data-testid="open-catalog-action" variant="secondary">
               <Link href="/catalog">
                 Catálogo
@@ -1074,7 +1439,7 @@ export function DashboardClient({
                                             )}
                                             key={item.id}
                                           >
-                                            <div>
+                                            <div className="space-y-2">
                                               <p
                                                 className={cn(
                                                   "text-sm font-semibold text-[var(--ink-strong)]",
@@ -1084,9 +1449,10 @@ export function DashboardClient({
                                               >
                                                 {item.name}
                                               </p>
-                                              <p className="font-mono text-xs uppercase tracking-[0.18em] text-[var(--ink-muted)]">
-                                                Qtde {item.quantity}
-                                              </p>
+                                              <ItemQuantityPill
+                                                quantity={item.quantity}
+                                                size="compact"
+                                              />
                                               {item.externalStatus?.detail ? (
                                                 <p
                                                   className={cn(

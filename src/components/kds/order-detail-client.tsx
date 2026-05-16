@@ -30,6 +30,7 @@ import {
   ProtectedSurfaceBanner,
   ProtectedSurfaceFallback,
 } from "@/src/components/kds/protected-surface-feedback";
+import { ItemQuantityPill } from "@/src/components/kds/item-quantity-pill";
 import { StatusBadge } from "@/src/components/kds/status-badge";
 import { Button } from "@/src/components/ui/button";
 import { Card } from "@/src/components/ui/card";
@@ -470,7 +471,7 @@ export function OrderDetailClient({
                       key={item.id}
                     >
                       <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div className="space-y-1">
+                        <div className="space-y-3">
                           <p
                             className={cn(
                               "font-display text-3xl uppercase tracking-[0.08em] text-[var(--ink-strong)]",
@@ -480,9 +481,7 @@ export function OrderDetailClient({
                           >
                             {item.name}
                           </p>
-                          <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--ink-muted)]">
-                            Quantidade {item.quantity}
-                          </p>
+                          <ItemQuantityPill quantity={item.quantity} />
                           {observation ? (
                             <ItemObservationCallout
                               observation={observation}
@@ -606,7 +605,7 @@ export function OrderDetailClient({
                         key={item.id}
                       >
                         <div className="flex items-center justify-between gap-3">
-                          <div>
+                          <div className="space-y-3">
                             <p
                               className={cn(
                                 "text-base font-semibold",
@@ -616,9 +615,7 @@ export function OrderDetailClient({
                             >
                               {item.name}
                             </p>
-                            <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-white/55">
-                              Quantidade {item.quantity}
-                            </p>
+                            <ItemQuantityPill quantity={item.quantity} tone="dark" />
                             {item.externalStatus?.detail ? (
                               <p
                                 className={cn(
