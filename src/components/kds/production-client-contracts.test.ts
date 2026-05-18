@@ -440,7 +440,7 @@ describe("production client contracts", () => {
     expect(markup).toContain("Mesa pronta 2");
   });
 
-  it("renders visibility toggles, keeps active alert states explicit, and hides non-operational columns by default", () => {
+  it("renders visibility toggles and hides non-operational board sections by default", () => {
     const makeTicket = (index: number, status: "new" | "canceled" = "new") => ({
       orderId: `order-${index}`,
       ticketId: `ticket-${index}`,
@@ -544,8 +544,8 @@ describe("production client contracts", () => {
     expect(markup).toContain('data-testid="board-toggle-column-new"');
     expect(markup).toContain('data-testid="board-toggle-column-canceled"');
     expect(markup).toContain('data-testid="board-toggle-sync-alerts"');
-    expect(markup).toContain("Alertas visíveis");
-    expect(markup).toContain('data-testid="board-sync-alerts"');
+    expect(markup).toContain("Alertas ocultos");
+    expect(markup).not.toContain('data-testid="board-sync-alerts"');
     expect(markup).toContain('data-testid="board-toggle-kitchen-kitchen-1"');
     expect(markup).toContain("Cozinha 1");
     expect(markup).not.toContain("Kitchen 1");

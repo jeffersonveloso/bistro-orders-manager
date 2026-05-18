@@ -137,6 +137,7 @@ const boardColumnStatuses = Object.keys(
 const dashboardPreferencesStorageKey = "bistro-dashboard-preferences";
 const boardColumnMinWidthRem = 22;
 const defaultNewOrderSoundEnabled = true;
+const defaultShowSyncAlerts = false;
 
 interface DashboardPreferences {
   columnVisibility?: Partial<Record<BoardColumnStatus, boolean>>;
@@ -145,7 +146,6 @@ interface DashboardPreferences {
   pageSize?: 4 | 6 | 8;
   referenceFilter?: string;
   showFilterPanel?: boolean;
-  showSyncAlerts?: boolean;
 }
 
 type KitchenBellState = "armed" | "pending_gesture" | "unsupported";
@@ -203,6 +203,28 @@ function isAllowedPageSize(value: number): value is 4 | 6 | 8 {
   return value === 4 || value === 6 || value === 8;
 }
 
+function sanitizeDashboardColumnVisibility(
+  columnVisibility?: Partial<Record<BoardColumnStatus, boolean>>,
+) {
+  if (!columnVisibility) {
+    return undefined;
+  }
+
+  const sanitizedEntries = boardColumnStatuses.flatMap((status) => {
+    if (status === "new") {
+      return [];
+    }
+
+    const value = columnVisibility[status];
+
+    return typeof value === "boolean" ? [[status, value] as const] : [];
+  });
+
+  return sanitizedEntries.length > 0
+    ? (Object.fromEntries(sanitizedEntries) as DashboardPreferences["columnVisibility"])
+    : undefined;
+}
+
 function readDashboardPreferencesFromUrl(): DashboardPreferences | null {
   if (typeof window === "undefined") {
     return null;
@@ -214,7 +236,6 @@ function readDashboardPreferencesFromUrl(): DashboardPreferences | null {
   const referenceFilter = searchParams.get("reference");
   const pageSize = Number(searchParams.get("pageSize"));
   const showFilterPanel = searchParams.get("filters");
-  const showSyncAlerts = searchParams.get("alerts");
   const visibleColumns = searchParams.get("columns");
   const visibleKitchens = searchParams.get("kitchens");
 
@@ -234,10 +255,6 @@ function readDashboardPreferencesFromUrl(): DashboardPreferences | null {
     preferences.showFilterPanel = showFilterPanel === "1";
   }
 
-  if (showSyncAlerts === "0" || showSyncAlerts === "1") {
-    preferences.showSyncAlerts = showSyncAlerts === "1";
-  }
-
   if (visibleColumns !== null) {
     const visibleColumnSet = new Set(
       visibleColumns === "none"
@@ -249,9 +266,11 @@ function readDashboardPreferencesFromUrl(): DashboardPreferences | null {
             ),
     );
 
-    preferences.columnVisibility = Object.fromEntries(
+    preferences.columnVisibility = sanitizeDashboardColumnVisibility(
+      Object.fromEntries(
       boardColumnStatuses.map((status) => [status, visibleColumnSet.has(status)]),
-    ) as DashboardPreferences["columnVisibility"];
+      ) as DashboardPreferences["columnVisibility"],
+    );
   }
 
   if (visibleKitchens !== null) {
@@ -275,7 +294,9 @@ function readDashboardPreferencesFromUrl(): DashboardPreferences | null {
 
 function buildDashboardSearchParams(preferences: DashboardPreferences) {
   const searchParams = new URLSearchParams();
-  const resolvedColumnVisibility = preferences.columnVisibility ?? defaultColumnVisibility;
+  const resolvedColumnVisibility =
+    sanitizeDashboardColumnVisibility(preferences.columnVisibility) ??
+    defaultColumnVisibility;
   const resolvedKitchenVisibility = preferences.kitchenVisibility ?? {};
   const hasNonDefaultColumns = boardColumnStatuses.some(
     (status) =>
@@ -300,10 +321,6 @@ function buildDashboardSearchParams(preferences: DashboardPreferences) {
 
   if (preferences.showFilterPanel === false) {
     searchParams.set("filters", "0");
-  }
-
-  if (preferences.showSyncAlerts === false) {
-    searchParams.set("alerts", "0");
   }
 
   if (hasNonDefaultColumns) {
@@ -384,7 +401,7 @@ export function DashboardClient({
   const [kitchenVisibility, setKitchenVisibility] = useState<
     Partial<Record<KitchenAreaId, boolean>>
   >({});
-  const [showSyncAlerts, setShowSyncAlerts] = useState(true);
+  const [showSyncAlerts, setShowSyncAlerts] = useState(defaultShowSyncAlerts);
   const [showFilterPanel, setShowFilterPanel] = useState(true);
   const [pageSize, setPageSize] = useState<4 | 6 | 8>(4);
   const [newOrderSoundEnabled, setNewOrderSoundEnabled] = useState(
@@ -555,10 +572,6 @@ export function DashboardClient({
         setShowFilterPanel(preferences.showFilterPanel);
       }
 
-      if (preferences.showSyncAlerts !== undefined) {
-        setShowSyncAlerts(preferences.showSyncAlerts);
-      }
-
       if (preferences.columnVisibility) {
         setColumnVisibility((current) => {
           const next = { ...current };
@@ -603,32 +616,28 @@ export function DashboardClient({
     }
 
     writeDashboardPreferences({
-      columnVisibility,
+      columnVisibility: sanitizeDashboardColumnVisibility(columnVisibility),
       customerFilter,
       kitchenVisibility,
       pageSize,
       referenceFilter,
       showFilterPanel,
-      showSyncAlerts,
     });
     writeDashboardPreferencesToUrl({
-      columnVisibility,
+      columnVisibility: sanitizeDashboardColumnVisibility(columnVisibility),
       customerFilter,
       kitchenVisibility,
       pageSize,
       referenceFilter,
       showFilterPanel,
-      showSyncAlerts,
     });
   }, [
     columnVisibility,
     customerFilter,
     kitchenVisibility,
-    newOrderSoundEnabled,
     pageSize,
     referenceFilter,
     showFilterPanel,
-    showSyncAlerts,
   ]);
 
   useEffect(() => {
@@ -803,7 +812,6 @@ export function DashboardClient({
         pageSize,
         referenceFilter,
         showFilterPanel,
-        showSyncAlerts,
       });
       const search = searchParams.toString();
 
