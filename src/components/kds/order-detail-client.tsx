@@ -30,6 +30,10 @@ import {
   ProtectedSurfaceBanner,
   ProtectedSurfaceFallback,
 } from "@/src/components/kds/protected-surface-feedback";
+import {
+  ReadyStatusRevertDialog,
+  shouldConfirmReadyStatusRevert,
+} from "@/src/components/kds/ready-status-revert-dialog";
 import { ItemQuantityPill } from "@/src/components/kds/item-quantity-pill";
 import { StatusBadge } from "@/src/components/kds/status-badge";
 import { Button } from "@/src/components/ui/button";
@@ -148,6 +152,12 @@ function ItemObservationCallout({
   );
 }
 
+function isReadyStatusRevertTarget(
+  status: "new" | "in_preparation" | "ready",
+): status is "new" | "in_preparation" {
+  return status !== "ready";
+}
+
 export function OrderDetailClient({
   orderId,
   kitchenId,
@@ -161,6 +171,11 @@ export function OrderDetailClient({
 }) {
   const queryClient = useQueryClient();
   const [showOtherKitchen, setShowOtherKitchen] = useState(true);
+  const [pendingReadyRevert, setPendingReadyRevert] = useState<{
+    itemId: string;
+    itemName: string;
+    nextStatus: "new" | "in_preparation";
+  } | null>(null);
 
   const orderQuery = useQuery(
     getOrderDetailQueryOptions({
@@ -203,7 +218,7 @@ export function OrderDetailClient({
       status,
     }: {
       itemId: string;
-      status: "in_preparation" | "ready";
+      status: "new" | "in_preparation" | "ready";
     }) =>
       fetchJson(`/api/orders/${orderId}/items/${itemId}`, {
         method: "PATCH",
@@ -211,6 +226,7 @@ export function OrderDetailClient({
         body: JSON.stringify({ status }),
       }),
     onSuccess: async () => {
+      setPendingReadyRevert(null);
       const invalidationKeys = getDashboardInvalidationKeys(orderId, kitchenId);
 
       await Promise.all(
@@ -226,6 +242,37 @@ export function OrderDetailClient({
     getProtectedSurfaceFeedback(itemMutation.error);
 
   const data = orderQuery.data;
+  const confirmReadyRevert = () => {
+    if (!pendingReadyRevert) {
+      return;
+    }
+
+    itemMutation.mutate({
+      itemId: pendingReadyRevert.itemId,
+      status: pendingReadyRevert.nextStatus,
+    });
+  };
+  const handleItemStatusChange = (
+    item: Pick<OrderItemPresentation, "id" | "name" | "status">,
+    nextStatus: "new" | "in_preparation" | "ready",
+  ) => {
+    if (
+      shouldConfirmReadyStatusRevert(item.status, nextStatus) &&
+      isReadyStatusRevertTarget(nextStatus)
+    ) {
+      setPendingReadyRevert({
+        itemId: item.id,
+        itemName: item.name,
+        nextStatus,
+      });
+      return;
+    }
+
+    itemMutation.mutate({
+      itemId: item.id,
+      status: nextStatus,
+    });
+  };
 
   if (orderQuery.isLoading) {
     return (
@@ -459,6 +506,9 @@ export function OrderDetailClient({
                 (() => {
                   const isCanceled = item.externalStatus?.kind === "canceled";
                   const observation = getItemObservation(item);
+                  const isUpdatingItem =
+                    itemMutation.isPending &&
+                    itemMutation.variables?.itemId === item.id;
 
                   return (
                     <Card
@@ -522,12 +572,10 @@ export function OrderDetailClient({
                             </Button>
                           ) : item.status === "new" ? (
                             <Button
-                              data-testid={`item-action-${item.id}`}
+                              data-testid={`item-action-start-${item.id}`}
+                              disabled={isUpdatingItem}
                               onClick={() =>
-                                itemMutation.mutate({
-                                  itemId: item.id,
-                                  status: "in_preparation",
-                                })
+                                handleItemStatusChange(item, "in_preparation")
                               }
                               size="sm"
                               variant="secondary"
@@ -535,21 +583,40 @@ export function OrderDetailClient({
                               Iniciar
                             </Button>
                           ) : item.status === "in_preparation" ? (
+                            <>
+                              <Button
+                                data-testid={`item-action-back-to-new-${item.id}`}
+                                disabled={isUpdatingItem}
+                                onClick={() =>
+                                  handleItemStatusChange(item, "new")
+                                }
+                                size="sm"
+                                variant="ghost"
+                              >
+                                Voltar para novo
+                              </Button>
+                              <Button
+                                data-testid={`item-action-mark-ready-${item.id}`}
+                                disabled={isUpdatingItem}
+                                onClick={() =>
+                                  handleItemStatusChange(item, "ready")
+                                }
+                                size="sm"
+                              >
+                                Marcar pronto
+                              </Button>
+                            </>
+                          ) : (
                             <Button
-                              data-testid={`item-action-${item.id}`}
+                              data-testid={`item-action-back-to-preparation-${item.id}`}
+                              disabled={isUpdatingItem}
                               onClick={() =>
-                                itemMutation.mutate({
-                                  itemId: item.id,
-                                  status: "ready",
-                                })
+                                handleItemStatusChange(item, "in_preparation")
                               }
                               size="sm"
+                              variant="secondary"
                             >
-                              Marcar pronto
-                            </Button>
-                          ) : (
-                            <Button disabled size="sm" variant="ghost">
-                              Finalizado
+                              Voltar para preparo
                             </Button>
                           )}
                         </div>
@@ -739,6 +806,17 @@ export function OrderDetailClient({
           </Card>
         ) : null}
       </div>
+      <ReadyStatusRevertDialog
+        isOpen={Boolean(pendingReadyRevert)}
+        isPending={
+          itemMutation.isPending &&
+          itemMutation.variables?.itemId === pendingReadyRevert?.itemId
+        }
+        itemName={pendingReadyRevert?.itemName ?? ""}
+        nextStatus={pendingReadyRevert?.nextStatus ?? "in_preparation"}
+        onCancel={() => setPendingReadyRevert(null)}
+        onConfirm={confirmReadyRevert}
+      />
     </main>
   );
 }

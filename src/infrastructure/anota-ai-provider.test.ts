@@ -58,6 +58,40 @@ function createOrderDetailResponse(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function createOrderDetailResponseWithWaiterInfo() {
+  return {
+    success: true,
+    info: {
+      _id: "6a0b854f40ab3e3fc0f5b11c",
+      check: 1,
+      createdAt: "2026-05-18T21:31:59.622Z",
+      updatedAt: "2026-05-18T21:31:59.736Z",
+      customer: {
+        name: "Wesley Ricardo Chalita",
+        phone: null,
+      },
+      from: "waiter-app",
+      salesChannel: "anotaai",
+      shortReference: 618,
+      waiter_info: {
+        waiter: "6a0791269dedcadc0e3b47a1",
+        waiter_name: "Wesley",
+      },
+      items: [
+        {
+          _id: "6a0b854f85ee6ade75851803",
+          id: 0,
+          internalId: "69fe73a2d3416d5327db3443",
+          name: "Croissant de frango",
+          quantity: 1,
+          externalId: "cbc6b6bc-22fc-437a-aaa3-20c79605ea50",
+          subItems: [],
+        },
+      ],
+    },
+  };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -178,6 +212,14 @@ describe("anota ai provider", () => {
 
     expect(snapshot.items[0]?.providerItemId).toBe("provider-product-id");
     expect(snapshot.items[1]?.providerItemId).toBe("provider-nested-item-id");
+  });
+
+  it("reads waiter names from waiter_info in canonical order payloads", () => {
+    const snapshot = normalizeAnotaOrderSnapshot(
+      createOrderDetailResponseWithWaiterInfo(),
+    );
+
+    expect(snapshot.waiterName).toBe("Wesley");
   });
 
   it("normalizes confirmed order listings into canonical snapshots consumable downstream", async () => {

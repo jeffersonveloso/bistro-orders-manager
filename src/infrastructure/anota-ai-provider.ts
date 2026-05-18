@@ -715,19 +715,52 @@ export function normalizeProviderSnapshotToProductionInput(
 
 function readAssignedWaiterName(info: Record<string, unknown>) {
   const namedObjects = [
+    info.waiter_info,
+    info.waiterInfo,
     info.waiter,
+    info.attendant_info,
+    info.attendantInfo,
     info.attendant,
+    info.server_info,
+    info.serverInfo,
     info.server,
+    info.employee_info,
+    info.employeeInfo,
     info.employee,
+    info.seller_info,
+    info.sellerInfo,
     info.seller,
+    info.salesperson_info,
+    info.salespersonInfo,
     info.salesperson,
+    info.cashier_info,
+    info.cashierInfo,
     info.cashier,
+    info.user_info,
+    info.userInfo,
     info.user,
   ];
 
   for (const candidate of namedObjects) {
     if (isPlainObject(candidate)) {
-      const name = readOptionalString(candidate.name);
+      const name =
+        readOptionalString(candidate.name) ??
+        readOptionalString(candidate.waiter_name) ??
+        readOptionalString(candidate.waiterName) ??
+        readOptionalString(candidate.attendant_name) ??
+        readOptionalString(candidate.attendantName) ??
+        readOptionalString(candidate.server_name) ??
+        readOptionalString(candidate.serverName) ??
+        readOptionalString(candidate.employee_name) ??
+        readOptionalString(candidate.employeeName) ??
+        readOptionalString(candidate.seller_name) ??
+        readOptionalString(candidate.sellerName) ??
+        readOptionalString(candidate.salesperson_name) ??
+        readOptionalString(candidate.salespersonName) ??
+        readOptionalString(candidate.cashier_name) ??
+        readOptionalString(candidate.cashierName) ??
+        readOptionalString(candidate.user_name) ??
+        readOptionalString(candidate.userName);
 
       if (name) {
         return name;
