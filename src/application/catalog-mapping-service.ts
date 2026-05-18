@@ -28,6 +28,8 @@ export interface CatalogMappingRepository {
   listKitchens(): Kitchen[];
   listKitchenMappings(): MenuItemKitchenMapping[];
   upsertKitchenMapping(mapping: MenuItemKitchenMapping): void;
+  listProviderCatalogItems(): ProviderCatalogItem[];
+  upsertProviderCatalogItems(items: ProviderCatalogItem[]): void;
   listProviderOrders(): ProviderOrderState[];
   listUnresolvedSyncExceptions(): SyncExceptionRecord[];
 }
@@ -39,6 +41,9 @@ export interface CatalogMappingEntry {
   kitchenName: string;
   providerItemId: string | null;
   providerExternalId: string | null;
+  providerCatalogDescription: string | null;
+  providerCatalogName: string | null;
+  providerCatalogUpdatedAt: string | null;
 }
 
 export interface CatalogPendingProviderItem {
@@ -48,6 +53,7 @@ export interface CatalogPendingProviderItem {
   providerExternalId: string | null;
   suggestedMenuItemId: string | null;
   latestName: string;
+  latestDescription: string | null;
   status: "needs_mapping" | "missing_external_id";
   lastSeenAt: string;
   seenOrderCount: number;
@@ -137,11 +143,14 @@ export function getCatalogMappingPageData(
 ): CatalogMappingPageData {
   const kitchens = repository.listKitchens();
   const mappings = repository.listKitchenMappings();
+  const providerCatalogItems = repository.listProviderCatalogItems();
+  const providerCatalogIndex = buildProviderCatalogIndex(providerCatalogItems);
   const pendingProviderItems = mergeCatalogPendingProviderItems(
     collectPendingProviderItems(
       repository.listProviderOrders().map((state) => state.snapshot),
       mappings,
     ),
+    collectPendingProviderCatalogItems(providerCatalogItems, mappings),
     additionalPendingProviderItems,
   );
   const pendingMissingMappingOrders = repository
@@ -150,16 +159,26 @@ export function getCatalogMappingPageData(
 
   return {
     kitchens,
-    mappings: mappings.map((mapping) => ({
-      kitchenId: mapping.kitchenId,
-      kitchenName:
-        kitchens.find((kitchen) => kitchen.id === mapping.kitchenId)?.name ??
-        mapping.kitchenId,
-      menuItemId: mapping.menuItemId,
-      menuItemName: mapping.menuItemName,
-      providerItemId: mapping.providerItemId ?? null,
-      providerExternalId: mapping.providerExternalId ?? null,
-    })),
+    mappings: mappings.map((mapping) => {
+      const providerCatalogItem = findProviderCatalogItemForMapping(
+        mapping,
+        providerCatalogIndex,
+      );
+
+      return {
+        kitchenId: mapping.kitchenId,
+        kitchenName:
+          kitchens.find((kitchen) => kitchen.id === mapping.kitchenId)?.name ??
+          mapping.kitchenId,
+        menuItemId: mapping.menuItemId,
+        menuItemName: mapping.menuItemName,
+        providerItemId: mapping.providerItemId ?? null,
+        providerExternalId: mapping.providerExternalId ?? null,
+        providerCatalogDescription: providerCatalogItem?.description ?? null,
+        providerCatalogName: providerCatalogItem?.name ?? null,
+        providerCatalogUpdatedAt: providerCatalogItem?.updatedAt ?? null,
+      };
+    }),
     pendingProviderItems,
     providerExternalIdSupport,
     providerCatalogStatus,
@@ -201,6 +220,7 @@ export async function getCatalogMappingPageDataFromProvider({
     const catalogItems = await catalogAdminProvider.listCatalogItems({
       limit: DEFAULT_PROVIDER_CATALOG_LIMIT,
     });
+    repository.upsertProviderCatalogItems(catalogItems);
     additionalPendingProviderItems = collectPendingProviderCatalogItems(
       catalogItems,
       repository.listKitchenMappings(),
@@ -242,7 +262,10 @@ export async function previewProviderCatalogPull({
     }): Promise<ProviderCatalogItem[]>;
     providerName(): ProviderName;
   };
-  repository: Pick<CatalogMappingRepository, "listKitchenMappings">;
+  repository: Pick<
+    CatalogMappingRepository,
+    "listKitchenMappings" | "upsertProviderCatalogItems"
+  >;
   limit?: number;
   updatedSince?: string;
 }): Promise<ProviderCatalogPullResult> {
@@ -254,6 +277,7 @@ export async function previewProviderCatalogPull({
     limit: normalizedLimit,
     updatedSince: updatedSinceUsed,
   });
+  repository.upsertProviderCatalogItems(catalogItems);
   const pendingProviderItems = collectPendingProviderCatalogItems(
     catalogItems,
     repository.listKitchenMappings(),
@@ -557,6 +581,7 @@ function collectPendingProviderItems(
       providerExternalId: string | null;
       providerItemId: string | null;
       lastSeenAt: string;
+      latestDescription: string | null;
       latestName: string;
       provider: ProviderName;
       sourceOrders: Map<
@@ -597,6 +622,7 @@ function collectPendingProviderItems(
           providerExternalId: item.catalogExternalId,
           providerItemId: item.providerItemId ?? null,
           lastSeenAt: snapshot.providerUpdatedAt,
+          latestDescription: null,
           latestName: normalizedName,
           provider: snapshot.provider,
           sourceOrders: new Map([
@@ -642,6 +668,7 @@ function collectPendingProviderItems(
       providerExternalId: observation.providerExternalId,
       suggestedMenuItemId: observation.suggestedMenuItemId,
       latestName: observation.latestName,
+      latestDescription: observation.latestDescription,
       status: observation.status,
       lastSeenAt: observation.lastSeenAt,
       seenOrderCount: observation.sourceOrders.size,
@@ -706,6 +733,7 @@ function collectPendingProviderCatalogItems(
         suggestedMenuItemId:
           existingByProviderItemId?.menuItemId ?? item.providerExternalId,
         latestName: item.name.trim(),
+        latestDescription: normalizeOptionalCatalogDescription(item.description),
         status: item.providerExternalId ? "needs_mapping" : "missing_external_id",
         lastSeenAt: item.updatedAt,
         seenOrderCount: 0,
@@ -718,10 +746,16 @@ function collectPendingProviderCatalogItems(
     if (item.updatedAt.localeCompare(existing.lastSeenAt) >= 0) {
       existing.lastSeenAt = item.updatedAt;
       existing.latestName = item.name.trim();
+      existing.latestDescription =
+        normalizeOptionalCatalogDescription(item.description) ??
+        existing.latestDescription;
     }
 
     existing.providerExternalId =
       existing.providerExternalId ?? item.providerExternalId;
+    existing.latestDescription =
+      existing.latestDescription ??
+      normalizeOptionalCatalogDescription(item.description);
   }
 
   return [...observations.values()].sort((left, right) =>
@@ -749,6 +783,8 @@ function mergeCatalogPendingProviderItems(
       if (item.lastSeenAt.localeCompare(existing.lastSeenAt) >= 0) {
         existing.lastSeenAt = item.lastSeenAt;
         existing.latestName = item.latestName;
+        existing.latestDescription =
+          item.latestDescription ?? existing.latestDescription;
         existing.status = item.status;
       }
 
@@ -757,6 +793,8 @@ function mergeCatalogPendingProviderItems(
         existing.providerExternalId ?? item.providerExternalId;
       existing.suggestedMenuItemId =
         existing.suggestedMenuItemId ?? item.suggestedMenuItemId;
+      existing.latestDescription =
+        existing.latestDescription ?? item.latestDescription;
       existing.seenOrderCount = Math.max(
         existing.seenOrderCount,
         item.seenOrderCount,
@@ -821,6 +859,55 @@ function buildDefaultPullWindow() {
 
 function normalizeLooseKey(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, "-");
+}
+
+function normalizeOptionalCatalogDescription(value: unknown) {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : null;
+}
+
+function buildProviderCatalogIndex(catalogItems: ProviderCatalogItem[]) {
+  const byProviderExternalId = new Map<string, ProviderCatalogItem>();
+  const byProviderItemId = new Map<string, ProviderCatalogItem>();
+
+  for (const item of catalogItems) {
+    if (item.providerItemId.trim().length > 0) {
+      byProviderItemId.set(item.providerItemId, item);
+    }
+
+    if (item.providerExternalId?.trim()) {
+      byProviderExternalId.set(item.providerExternalId, item);
+    }
+  }
+
+  return {
+    byProviderExternalId,
+    byProviderItemId,
+  };
+}
+
+function findProviderCatalogItemForMapping(
+  mapping: MenuItemKitchenMapping,
+  providerCatalogIndex: ReturnType<typeof buildProviderCatalogIndex>,
+) {
+  if (mapping.providerItemId) {
+    const providerCatalogItem = providerCatalogIndex.byProviderItemId.get(
+      mapping.providerItemId,
+    );
+
+    if (providerCatalogItem) {
+      return providerCatalogItem;
+    }
+  }
+
+  if (mapping.providerExternalId) {
+    return providerCatalogIndex.byProviderExternalId.get(
+      mapping.providerExternalId,
+    );
+  }
+
+  return undefined;
 }
 
 function asRecord(value: unknown) {

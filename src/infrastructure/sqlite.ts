@@ -31,6 +31,7 @@ import {
   syncExceptionStatuses,
   syncTriggers,
   syncRunStatuses,
+  type ProviderCatalogItem,
   type ProviderEventRecord,
   type ProviderName,
   type ProviderOrderState,
@@ -88,6 +89,16 @@ export interface ProviderOrderRow {
   lastSeenAt: string;
   lastAppliedAt: string | null;
   importedOrderId: string | null;
+}
+
+export interface ProviderCatalogItemRow {
+  provider: string;
+  providerItemId: string;
+  providerExternalId: string | null;
+  name: string;
+  description: string | null;
+  updatedAt: string;
+  rawPayloadJson: string;
 }
 
 export interface SyncExceptionRow {
@@ -235,6 +246,17 @@ function migrate(db: SqliteDatabase) {
       PRIMARY KEY (provider, external_order_id)
     );
 
+    CREATE TABLE IF NOT EXISTS provider_catalog_items (
+      provider TEXT NOT NULL,
+      provider_item_id TEXT NOT NULL,
+      provider_external_id TEXT,
+      name TEXT NOT NULL,
+      description TEXT,
+      updated_at TEXT NOT NULL,
+      raw_payload_json TEXT NOT NULL,
+      PRIMARY KEY (provider, provider_item_id)
+    );
+
     CREATE TABLE IF NOT EXISTS order_sync_exceptions (
       id TEXT PRIMARY KEY,
       provider TEXT NOT NULL,
@@ -262,6 +284,10 @@ function migrate(db: SqliteDatabase) {
       ON sync_runs(provider, started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_provider_orders_imported_order_id
       ON provider_orders(imported_order_id);
+    CREATE INDEX IF NOT EXISTS idx_provider_catalog_items_provider_external_id
+      ON provider_catalog_items(provider, provider_external_id);
+    CREATE INDEX IF NOT EXISTS idx_provider_catalog_items_updated_at
+      ON provider_catalog_items(updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_order_sync_exceptions_status_order
       ON order_sync_exceptions(status, order_id, last_seen_at DESC);
     CREATE INDEX IF NOT EXISTS idx_order_sync_exceptions_provider_lookup
@@ -269,6 +295,7 @@ function migrate(db: SqliteDatabase) {
   `);
 
   ensureProviderMappingColumns(db);
+  ensureProviderCatalogItemColumns(db);
   ensureOrderMetadataColumns(db);
   ensureKitchenTicketMetadataColumns(db);
 }
@@ -340,6 +367,20 @@ function ensureProviderMappingColumns(db: SqliteDatabase) {
       ON menu_item_kitchen_mappings(menu_item_name COLLATE NOCASE)
   `);
 
+}
+
+function ensureProviderCatalogItemColumns(db: SqliteDatabase) {
+  const columns = db
+    .prepare("PRAGMA table_info(provider_catalog_items)")
+    .all() as Array<{ name: string }>;
+  const hasDescription = columns.some((column) => column.name === "description");
+
+  if (!hasDescription) {
+    db.exec(`
+      ALTER TABLE provider_catalog_items
+      ADD COLUMN description TEXT
+    `);
+  }
 }
 
 function ensureOrderMetadataColumns(db: SqliteDatabase) {
@@ -745,6 +786,20 @@ export function mapProviderOrderRow(row: ProviderOrderRow): ProviderOrderState {
   };
 }
 
+export function mapProviderCatalogItemRow(
+  row: ProviderCatalogItemRow,
+): ProviderCatalogItem {
+  return {
+    provider: requireProviderName(row.provider),
+    providerItemId: row.providerItemId,
+    providerExternalId: row.providerExternalId,
+    name: row.name,
+    description: row.description,
+    updatedAt: row.updatedAt,
+    rawPayload: deserializeJson(row.rawPayloadJson),
+  };
+}
+
 export function mapSyncExceptionRow(
   row: SyncExceptionRow,
 ): SyncExceptionRecord {
@@ -804,6 +859,62 @@ function createProductionRepository(db: SqliteDatabase): SqliteProductionReposit
         menu_item_kitchen_mappings.provider_external_id
       )
   `);
+
+  const selectAllProviderCatalogItems = db.prepare(`
+    SELECT
+      provider,
+      provider_item_id as providerItemId,
+      provider_external_id as providerExternalId,
+      name,
+      description,
+      updated_at as updatedAt,
+      raw_payload_json as rawPayloadJson
+    FROM provider_catalog_items
+    ORDER BY updated_at DESC, name ASC
+  `);
+
+  const upsertProviderCatalogItemStatement = db.prepare(`
+    INSERT INTO provider_catalog_items (
+      provider,
+      provider_item_id,
+      provider_external_id,
+      name,
+      description,
+      updated_at,
+      raw_payload_json
+    )
+    VALUES (
+      @provider,
+      @providerItemId,
+      @providerExternalId,
+      @name,
+      @description,
+      @updatedAt,
+      @rawPayloadJson
+    )
+    ON CONFLICT(provider, provider_item_id) DO UPDATE SET
+      provider_external_id = excluded.provider_external_id,
+      name = excluded.name,
+      description = excluded.description,
+      updated_at = excluded.updated_at,
+      raw_payload_json = excluded.raw_payload_json
+  `);
+
+  const persistProviderCatalogItems = db.transaction(
+    (items: ProviderCatalogItem[]) => {
+      for (const item of items) {
+        upsertProviderCatalogItemStatement.run({
+          provider: item.provider,
+          providerItemId: item.providerItemId,
+          providerExternalId: item.providerExternalId ?? null,
+          name: item.name,
+          description: item.description ?? null,
+          updatedAt: item.updatedAt,
+          rawPayloadJson: serializeJson(item.rawPayload),
+        });
+      }
+    },
+  );
 
   const insertOrder = db.prepare(`
     INSERT INTO orders (
@@ -1365,6 +1476,14 @@ function createProductionRepository(db: SqliteDatabase): SqliteProductionReposit
         providerExternalId: mapping.providerExternalId ?? null,
       });
     },
+    listProviderCatalogItems() {
+      return (
+        selectAllProviderCatalogItems.all() as ProviderCatalogItemRow[]
+      ).map(mapProviderCatalogItemRow);
+    },
+    upsertProviderCatalogItems(items) {
+      persistProviderCatalogItems(items);
+    },
     listImportedExternalOrderIds() {
       const rows = db
         .prepare(
@@ -1418,14 +1537,36 @@ function createProductionRepository(db: SqliteDatabase): SqliteProductionReposit
         )
         .get(itemId) as { kitchenId: KitchenId } | undefined;
 
-      if (status !== "new" && kitchenId?.kitchenId) {
-        db.prepare(
-          `
-            UPDATE kitchen_tickets
-            SET started_at = COALESCE(started_at, ?), updated_at = ?
-            WHERE order_id = ? AND kitchen_id = ?
-          `,
-        ).run(timestamp, timestamp, orderId, kitchenId.kitchenId);
+      if (kitchenId?.kitchenId) {
+        if (status === "new") {
+          const activeItems = db
+            .prepare(
+              `
+                SELECT COUNT(*) as total
+                FROM order_items
+                WHERE order_id = ? AND kitchen_id = ? AND status <> 'new'
+              `,
+            )
+            .get(orderId, kitchenId.kitchenId) as { total: number };
+
+          if (activeItems.total === 0) {
+            db.prepare(
+              `
+                UPDATE kitchen_tickets
+                SET started_at = NULL, updated_at = ?
+                WHERE order_id = ? AND kitchen_id = ?
+              `,
+            ).run(timestamp, orderId, kitchenId.kitchenId);
+          }
+        } else {
+          db.prepare(
+            `
+              UPDATE kitchen_tickets
+              SET started_at = COALESCE(started_at, ?), updated_at = ?
+              WHERE order_id = ? AND kitchen_id = ?
+            `,
+          ).run(timestamp, timestamp, orderId, kitchenId.kitchenId);
+        }
       }
 
       touchTicketAndOrder(orderId, kitchenId?.kitchenId);

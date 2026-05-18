@@ -34,6 +34,7 @@ import {
   ReadyStatusRevertDialog,
   shouldConfirmReadyStatusRevert,
 } from "@/src/components/kds/ready-status-revert-dialog";
+import { ItemObservationCallout } from "@/src/components/kds/item-observation-callout";
 import { ItemQuantityPill } from "@/src/components/kds/item-quantity-pill";
 import { StatusBadge } from "@/src/components/kds/status-badge";
 import { Button } from "@/src/components/ui/button";
@@ -111,45 +112,6 @@ function getItemObservation(
   item: Pick<OrderItemPresentation, "notes" | "observation">,
 ) {
   return item.observation ?? item.notes;
-}
-
-function ItemObservationCallout({
-  observation,
-  tone,
-  className,
-}: {
-  observation: string;
-  tone: "light" | "dark";
-  className?: string;
-}) {
-  return (
-    <div
-      className={cn(
-        "rounded-[1.1rem] border px-3 py-2",
-        tone === "light"
-          ? "border-[var(--panel-border)] bg-white/82"
-          : "border-white/10 bg-white/8",
-        className,
-      )}
-    >
-      <p
-        className={cn(
-          "font-mono text-[10px] uppercase tracking-[0.2em]",
-          tone === "light" ? "text-[var(--ink-muted)]" : "text-white/55",
-        )}
-      >
-        Observação
-      </p>
-      <p
-        className={cn(
-          "mt-1 text-sm leading-6",
-          tone === "light" ? "text-[var(--ink-soft)]" : "text-white/75",
-        )}
-      >
-        {observation}
-      </p>
-    </div>
-  );
 }
 
 function isReadyStatusRevertTarget(
@@ -535,6 +497,7 @@ export function OrderDetailClient({
                           {observation ? (
                             <ItemObservationCallout
                               observation={observation}
+                              size="default"
                               tone="light"
                             />
                           ) : null}
@@ -682,7 +645,7 @@ export function OrderDetailClient({
                             >
                               {item.name}
                             </p>
-                            <ItemQuantityPill quantity={item.quantity} tone="dark" />
+                          <ItemQuantityPill quantity={item.quantity} tone="dark" />
                             {item.externalStatus?.detail ? (
                               <p
                                 className={cn(
@@ -716,6 +679,7 @@ export function OrderDetailClient({
                           <ItemObservationCallout
                             className="mt-3"
                             observation={observation}
+                            size="default"
                             tone="dark"
                           />
                         ) : null}

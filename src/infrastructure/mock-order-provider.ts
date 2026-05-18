@@ -222,11 +222,13 @@ const mockCatalogItems: ProviderCatalogItem[] = [
     providerItemId: mapping.providerItemId ?? `mock-provider-item-${index + 1}`,
     providerExternalId: mapping.providerExternalId ?? null,
     name: mapping.menuItemName,
+    description: `Catálogo mock do item ${mapping.menuItemName}.`,
     updatedAt: minutesAgo(120 - index),
     rawPayload: {
       id: mapping.providerItemId ?? `mock-provider-item-${index + 1}`,
       externalId: mapping.providerExternalId ?? null,
       name: mapping.menuItemName,
+      description: `Catálogo mock do item ${mapping.menuItemName}.`,
     },
   })),
   {
@@ -234,11 +236,13 @@ const mockCatalogItems: ProviderCatalogItem[] = [
     providerItemId: "mock-item-club-sandwich",
     providerExternalId: "club-sandwich",
     name: "Club Sandwich",
+    description: "Pão brioche, frango grelhado e molho da casa.",
     updatedAt: minutesAgo(6),
     rawPayload: {
       id: "mock-item-club-sandwich",
       externalId: "club-sandwich",
       name: "Club Sandwich",
+      description: "Pão brioche, frango grelhado e molho da casa.",
     },
   },
   {
@@ -246,10 +250,12 @@ const mockCatalogItems: ProviderCatalogItem[] = [
     providerItemId: "mock-item-secret-cake",
     providerExternalId: null,
     name: "Bolo secreto",
+    description: "Sobremesa do dia na vitrine.",
     updatedAt: minutesAgo(4),
     rawPayload: {
       id: "mock-item-secret-cake",
       name: "Bolo secreto",
+      description: "Sobremesa do dia na vitrine.",
     },
   },
 ];

@@ -101,6 +101,36 @@ describe("splitProviderOrder", () => {
     expect(result.items[0]?.menuItemId).toBe("local-croissant-id");
   });
 
+  it("preserves the item name from the provider payload even when the local mapping name is stale", () => {
+    const result = splitProviderOrder(
+      {
+        externalId: "demo-2b-name",
+        reference: "Pedido Demo 2B Name",
+        channel: "test",
+        createdAt: "2026-05-11T10:00:00.000Z",
+        items: [
+          {
+            externalItemId: "item-1",
+            menuItemId: "provider-croissant",
+            name: "Croissant amanteigado do payload",
+            quantity: 1,
+          },
+        ],
+      },
+      [
+        {
+          kitchenId: "kitchen-2",
+          menuItemId: "local-croissant-id",
+          menuItemName: "Croissant antigo no mapping",
+          providerExternalId: "provider-croissant",
+        },
+      ],
+    );
+
+    expect(result.items[0]?.menuItemId).toBe("local-croissant-id");
+    expect(result.items[0]?.name).toBe("Croissant amanteigado do payload");
+  });
+
   it("falls back to provider item id when the order line has no external routing key", () => {
     const result = splitProviderOrder(
       {

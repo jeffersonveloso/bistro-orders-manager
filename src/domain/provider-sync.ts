@@ -95,6 +95,7 @@ export interface ProviderCatalogItem {
   providerItemId: string;
   providerExternalId: string | null;
   name: string;
+  description?: string | null;
   updatedAt: string;
   rawPayload: unknown;
 }

@@ -48,9 +48,23 @@ function mergePendingProviderItems(
   for (const item of previewItems) {
     const existing = merged.get(item.key);
 
-    if (!existing || item.lastSeenAt.localeCompare(existing.lastSeenAt) >= 0) {
+    if (!existing) {
       merged.set(item.key, item);
+      continue;
     }
+
+    if (item.lastSeenAt.localeCompare(existing.lastSeenAt) >= 0) {
+      merged.set(item.key, {
+        ...item,
+        latestDescription: item.latestDescription ?? existing.latestDescription,
+      });
+      continue;
+    }
+
+    merged.set(item.key, {
+      ...existing,
+      latestDescription: existing.latestDescription ?? item.latestDescription,
+    });
   }
 
   return [...merged.values()].sort((left, right) =>
@@ -897,6 +911,11 @@ export function CatalogMappingsClient({
                               <h3 className="text-lg font-semibold text-[var(--ink-strong)]">
                                 {item.latestName}
                               </h3>
+                              {item.latestDescription ? (
+                                <p className="max-w-3xl rounded-[1rem] border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2 text-sm leading-6 text-[var(--ink-soft)]">
+                                  {item.latestDescription}
+                                </p>
+                              ) : null}
                               <p className="text-sm leading-6 text-[var(--ink-soft)]">
                                 {item.seenOrderCount > 0
                                   ? `Visto em ${item.seenOrderCount} pedido(s). Última leitura ${formatMinutesFrom(item.lastSeenAt)} atrás.`
@@ -965,6 +984,11 @@ export function CatalogMappingsClient({
                               <h3 className="text-lg font-semibold text-[var(--ink-strong)]">
                                 {item.latestName}
                               </h3>
+                              {item.latestDescription ? (
+                                <p className="max-w-3xl rounded-[1rem] border border-[color-mix(in_oklab,var(--accent-warm)_32%,white)] bg-white/75 px-3 py-2 text-sm leading-6 text-[var(--ink-soft)]">
+                                  {item.latestDescription}
+                                </p>
+                              ) : null}
                               <p className="text-sm leading-6 text-[var(--ink-soft)]">
                                 Este item foi lido no provider sem `externalID`. O
                                 sistema pode gerar agora um ID do bistrô, salvar o
@@ -1062,6 +1086,30 @@ export function CatalogMappingsClient({
                             <p className="mt-1 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--ink-muted)]">
                               Item provider: {protectProviderValue(mapping.providerItemId)}
                             </p>
+                          ) : null}
+                          {mapping.providerCatalogName || mapping.providerCatalogDescription ? (
+                            <div className="mt-3 rounded-[1rem] border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-3">
+                              <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--ink-muted)]">
+                                Catálogo sincronizado
+                              </p>
+                              {mapping.providerCatalogName ? (
+                                <p className="mt-1 text-sm font-semibold text-[var(--ink-strong)]">
+                                  {mapping.providerCatalogName}
+                                </p>
+                              ) : null}
+                              {mapping.providerCatalogDescription ? (
+                                <p className="mt-1 text-sm leading-6 text-[var(--ink-soft)]">
+                                  {mapping.providerCatalogDescription}
+                                </p>
+                              ) : null}
+                              {mapping.providerCatalogUpdatedAt ? (
+                                <p className="mt-2 text-xs leading-5 text-[var(--ink-muted)]">
+                                  Atualizado no provider {formatMinutesFrom(
+                                    mapping.providerCatalogUpdatedAt,
+                                  )} atrás.
+                                </p>
+                              ) : null}
+                            </div>
                           ) : null}
                         </div>
 

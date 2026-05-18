@@ -15,6 +15,7 @@ import {
   getDashboardInvalidationKeys,
   getSalonQueryOptions,
 } from "@/src/components/kds/production-client-contracts";
+import { ReadyStatusRevertDialog } from "@/src/components/kds/ready-status-revert-dialog";
 import { SalonClient } from "@/src/components/kds/salon-client";
 import { createProductionTestContext } from "@/src/infrastructure/sqlite";
 
@@ -190,7 +191,45 @@ describe("production client contracts", () => {
     }
   });
 
-  it("renders item observations on the order-detail surface from the observation field", () => {
+  it("renders waiter metadata on dashboard and order-detail surfaces", () => {
+    const context = createProductionTestContext({
+      importProviderOrders: true,
+    });
+
+    try {
+      const orderDetailData = getOrderDetailData(
+        context.repository,
+        "order_anota-101",
+        "kitchen-1",
+      );
+
+      if (!orderDetailData) {
+        throw new Error("Expected order detail data for waiter regression");
+      }
+
+      const dashboardMarkup = renderClient(
+        createElement(DashboardClient, {
+          activeKitchenId: "kitchen-1",
+          initialData: getDashboardData(context.repository),
+        }),
+      );
+      const orderDetailMarkup = renderClient(
+        createElement(OrderDetailClient, {
+          initialData: orderDetailData,
+          kitchenId: "kitchen-1",
+          orderId: "order_anota-101",
+        }),
+      );
+
+      expect(dashboardMarkup).toContain("Garçom Clara");
+      expect(orderDetailMarkup).toContain("Garçom");
+      expect(orderDetailMarkup).toContain("Clara");
+    } finally {
+      context.close();
+    }
+  });
+
+  it("renders item observations on the dashboard and order-detail surfaces from the observation field", () => {
     const context = createProductionTestContext({
       applyDemoScenarios: true,
       importProviderOrders: true,
@@ -207,10 +246,100 @@ describe("production client contracts", () => {
         throw new Error("Expected mixed-kitchen order detail data for observation regression");
       }
 
+      const dashboardData = getDashboardData(context.repository);
+      const dashboardItem =
+        dashboardData.kitchens
+          .flatMap((kitchen) => kitchen.columns)
+          .flatMap((column) => column.tickets)
+          .flatMap((ticket) => ticket.currentItems)
+          .find((item) => item.id === "order_anota-101__101-1") ?? null;
+
+      if (!dashboardItem) {
+        throw new Error("Expected dashboard item data for observation regression");
+      }
+
       orderDetailData.focusItems[0].notes = null;
       orderDetailData.focusItems[0].observation = "Sem gelo";
       orderDetailData.otherKitchen.items[0].notes = null;
       orderDetailData.otherKitchen.items[0].observation = "Aquecer antes de sair";
+      dashboardItem.notes = null;
+      dashboardItem.observation = "Sem gelo";
+
+      const dashboardMarkup = renderClient(
+        createElement(DashboardClient, {
+          activeKitchenId: "kitchen-1",
+          initialData: dashboardData,
+        }),
+      );
+
+      const orderDetailMarkup = renderClient(
+        createElement(OrderDetailClient, {
+          initialData: orderDetailData,
+          kitchenId: "kitchen-1",
+          orderId: "order_anota-101",
+        }),
+      );
+
+      expect(dashboardMarkup).toContain("Observação");
+      expect(dashboardMarkup).toContain("Sem gelo");
+      expect(orderDetailMarkup).toContain("Observação");
+      expect(orderDetailMarkup).toContain("Sem gelo");
+      expect(orderDetailMarkup).toContain("Aquecer antes de sair");
+    } finally {
+      context.close();
+    }
+  });
+
+  it("renders a confirmation dialog for ready-item reversions", () => {
+    const markup = renderClient(
+      createElement(ReadyStatusRevertDialog, {
+        isOpen: true,
+        itemName: "Croissant",
+        nextStatus: "in_preparation",
+        onCancel: () => undefined,
+        onConfirm: () => undefined,
+      }),
+    );
+
+    expect(markup).toContain('data-testid="ready-status-revert-dialog"');
+    expect(markup).toContain("Reverter item pronto");
+    expect(markup).toContain("Croissant");
+    expect(markup).toContain("Pronto");
+    expect(markup).toContain("Em preparo");
+    expect(markup).toContain('data-testid="ready-status-revert-confirm"');
+    expect(markup).toContain('data-testid="ready-status-revert-cancel"');
+  });
+
+  it("renders reversible item actions on the order-detail surface for correction flows", () => {
+    const context = createProductionTestContext({
+      applyDemoScenarios: true,
+      importProviderOrders: true,
+    });
+
+    try {
+      const orderDetailData = getOrderDetailData(
+        context.repository,
+        "order_anota-101",
+        "kitchen-1",
+      );
+
+      if (!orderDetailData) {
+        throw new Error("Expected order detail data for item correction regression");
+      }
+
+      const prepItem = orderDetailData.focusItems.find(
+        (item) => item.id === "order_anota-101__101-1",
+      );
+      const readyItem = orderDetailData.focusItems.find(
+        (item) => item.id === "order_anota-101__101-2",
+      );
+
+      if (!prepItem || !readyItem) {
+        throw new Error("Expected focus items for correction regression");
+      }
+
+      prepItem.status = "in_preparation";
+      readyItem.status = "ready";
 
       const markup = renderClient(
         createElement(OrderDetailClient, {
@@ -220,9 +349,11 @@ describe("production client contracts", () => {
         }),
       );
 
-      expect(markup).toContain("Observação");
-      expect(markup).toContain("Sem gelo");
-      expect(markup).toContain("Aquecer antes de sair");
+      expect(markup).toContain('data-testid="item-action-back-to-new-order_anota-101__101-1"');
+      expect(markup).toContain("Voltar para novo");
+      expect(markup).toContain('data-testid="item-action-mark-ready-order_anota-101__101-1"');
+      expect(markup).toContain('data-testid="item-action-back-to-preparation-order_anota-101__101-2"');
+      expect(markup).toContain("Voltar para preparo");
     } finally {
       context.close();
     }

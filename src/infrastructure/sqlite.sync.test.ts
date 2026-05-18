@@ -153,6 +153,49 @@ describe("sqlite sync repository", () => {
     }
   });
 
+  it("persists provider catalog item name and description updates locally", () => {
+    const context = createProductionTestContext();
+
+    try {
+      context.repository.upsertProviderCatalogItems([
+        {
+          provider: "anota_ai",
+          providerItemId: "provider-item-club-sandwich",
+          providerExternalId: "club-sandwich",
+          name: "Club Sandwich",
+          description: "Versão inicial.",
+          updatedAt: "2026-05-11T12:00:00.000Z",
+          rawPayload: { id: "provider-item-club-sandwich" },
+        },
+      ]);
+      context.repository.upsertProviderCatalogItems([
+        {
+          provider: "anota_ai",
+          providerItemId: "provider-item-club-sandwich",
+          providerExternalId: "club-sandwich",
+          name: "Club Sandwich defumado",
+          description: "Pão brioche, frango defumado e molho da casa.",
+          updatedAt: "2026-05-11T13:00:00.000Z",
+          rawPayload: { id: "provider-item-club-sandwich", version: 2 },
+        },
+      ]);
+
+      expect(context.repository.listProviderCatalogItems()).toEqual([
+        {
+          provider: "anota_ai",
+          providerItemId: "provider-item-club-sandwich",
+          providerExternalId: "club-sandwich",
+          name: "Club Sandwich defumado",
+          description: "Pão brioche, frango defumado e molho da casa.",
+          updatedAt: "2026-05-11T13:00:00.000Z",
+          rawPayload: { id: "provider-item-club-sandwich", version: 2 },
+        },
+      ]);
+    } finally {
+      context.close();
+    }
+  });
+
   it("maps sync run and exception rows into typed records", () => {
     const run = mapSyncRunRow({
       id: "run-1",

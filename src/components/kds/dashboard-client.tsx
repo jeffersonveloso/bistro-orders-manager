@@ -29,7 +29,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { ComponentType, MutableRefObject } from "react";
+import type { ComponentType } from "react";
 
 import type {
   BoardTicketCard,
@@ -42,6 +42,12 @@ import {
   mergeTrackedKitchenOrderIds,
 } from "@/src/components/kds/dashboard-notifications";
 import {
+  disposeKitchenBell,
+  hasKitchenBellSupport,
+  playKitchenBell,
+  prepareKitchenBell,
+} from "@/src/components/kds/kitchen-bell";
+import {
   canManageKitchen,
   getBoardQueryOptions,
   getDashboardInvalidationKeys,
@@ -50,6 +56,7 @@ import {
   prioritizeKitchens,
 } from "@/src/components/kds/production-client-contracts";
 import { AreaSwitchButton } from "@/src/components/kds/area-switch-button";
+import { ItemObservationCallout } from "@/src/components/kds/item-observation-callout";
 import { ItemQuantityPill } from "@/src/components/kds/item-quantity-pill";
 import {
   ProtectedSurfaceBanner,
@@ -103,6 +110,15 @@ function matchesTicketFilters(
   return matchesCustomer && matchesReference;
 }
 
+function getItemObservation(
+  item: Pick<
+    BoardTicketCard["currentItems"][number],
+    "notes" | "observation"
+  >,
+) {
+  return item.observation ?? item.notes;
+}
+
 function getColumnPageKey(kitchenId: string, status: string) {
   return `${kitchenId}:${status}`;
 }
@@ -133,97 +149,7 @@ interface DashboardPreferences {
   showSyncAlerts?: boolean;
 }
 
-type BrowserAudioContextConstructor = typeof AudioContext;
 type KitchenBellState = "armed" | "pending_gesture" | "unsupported";
-
-function getBrowserAudioContextConstructor() {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  return (
-    window.AudioContext ??
-    (
-      window as Window &
-        typeof globalThis & {
-          webkitAudioContext?: BrowserAudioContextConstructor;
-        }
-    ).webkitAudioContext ??
-    null
-  );
-}
-
-async function ensureKitchenBellContext(
-  audioContextRef: MutableRefObject<AudioContext | null>,
-) {
-  const AudioContextConstructor = getBrowserAudioContextConstructor();
-
-  if (!AudioContextConstructor) {
-    return null;
-  }
-
-  const context = audioContextRef.current ?? new AudioContextConstructor();
-  audioContextRef.current = context;
-
-  if (context.state === "suspended") {
-    try {
-      await context.resume();
-    } catch {
-      return null;
-    }
-  }
-
-  return context.state === "running" ? context : null;
-}
-
-async function playKitchenBell(
-  audioContextRef: MutableRefObject<AudioContext | null>,
-) {
-  const context = await ensureKitchenBellContext(audioContextRef);
-
-  if (!context) {
-    return false;
-  }
-
-  const masterGain = context.createGain();
-  masterGain.connect(context.destination);
-  masterGain.gain.setValueAtTime(0.0001, context.currentTime);
-
-  const now = context.currentTime;
-  const steps = [
-    { duration: 0.26, frequency: 1046.5, offset: 0, peak: 0.12 },
-    { duration: 0.32, frequency: 1318.51, offset: 0.14, peak: 0.08 },
-  ];
-
-  for (const step of steps) {
-    const oscillator = context.createOscillator();
-    const gain = context.createGain();
-    const startAt = now + step.offset;
-    const releaseAt = startAt + step.duration;
-
-    oscillator.type = "square";
-    oscillator.frequency.setValueAtTime(step.frequency, startAt);
-    oscillator.connect(gain);
-    gain.connect(masterGain);
-
-    gain.gain.setValueAtTime(0.0001, startAt);
-    gain.gain.exponentialRampToValueAtTime(step.peak, startAt + 0.018);
-    gain.gain.exponentialRampToValueAtTime(0.0001, releaseAt);
-
-    oscillator.start(startAt);
-    oscillator.stop(releaseAt + 0.02);
-    oscillator.onended = () => {
-      oscillator.disconnect();
-      gain.disconnect();
-    };
-  }
-
-  window.setTimeout(() => {
-    masterGain.disconnect();
-  }, 650);
-
-  return true;
-}
 
 function getNewOrderNotificationLabel(count: number) {
   if (count === 0) {
@@ -478,6 +404,7 @@ export function DashboardClient({
   const preferencesHydratedRef = useRef(false);
   const trackedKitchenOrderIdsRef = useRef<string[] | null>(null);
   const bellAudioContextRef = useRef<AudioContext | null>(null);
+  const bellAudioElementRef = useRef<HTMLAudioElement | null>(null);
   const pendingBellPlaybackRef = useRef(false);
   const [kitchenBellState, setKitchenBellState] = useState<KitchenBellState>(
     "pending_gesture",
@@ -506,27 +433,36 @@ export function DashboardClient({
   }
 
   async function armKitchenBell(options: { playPreview?: boolean } = {}) {
-    const hasBellSupport = Boolean(getBrowserAudioContextConstructor());
-
-    if (!hasBellSupport) {
+    if (!hasKitchenBellSupport()) {
       setKitchenBellState("unsupported");
       return false;
     }
 
-    const context = await ensureKitchenBellContext(bellAudioContextRef);
+    const prepared = await prepareKitchenBell({
+      audioContextRef: bellAudioContextRef,
+      audioElementRef: bellAudioElementRef,
+    });
 
-    if (!context) {
+    if (!prepared) {
       setKitchenBellState("pending_gesture");
       return false;
     }
 
-    setKitchenBellState("armed");
-
     if (pendingBellPlaybackRef.current || options.playPreview) {
       pendingBellPlaybackRef.current = false;
-      await playKitchenBell(bellAudioContextRef);
+      const played = await playKitchenBell({
+        audioContextRef: bellAudioContextRef,
+        audioElementRef: bellAudioElementRef,
+      });
+
+      if (!played) {
+        pendingBellPlaybackRef.current = true;
+        setKitchenBellState("pending_gesture");
+        return false;
+      }
     }
 
+    setKitchenBellState("armed");
     return true;
   }
 
@@ -722,12 +658,10 @@ export function DashboardClient({
       window.removeEventListener("pointerdown", unlockBell);
       window.removeEventListener("keydown", unlockBell);
 
-      const context = bellAudioContextRef.current;
-      bellAudioContextRef.current = null;
-
-      if (context) {
-        void context.close().catch(() => undefined);
-      }
+      void disposeKitchenBell({
+        audioContextRef: bellAudioContextRef,
+        audioElementRef: bellAudioElementRef,
+      });
     };
   }, [newOrderSoundEnabled]);
 
@@ -771,18 +705,17 @@ export function DashboardClient({
     });
 
     if (newOrderSoundEnabled) {
-      void playKitchenBell(bellAudioContextRef).then((played) => {
+      void playKitchenBell({
+        audioContextRef: bellAudioContextRef,
+        audioElementRef: bellAudioElementRef,
+      }).then((played) => {
         if (played) {
           setKitchenBellState("armed");
           return;
         }
 
         pendingBellPlaybackRef.current = true;
-        setKitchenBellState(
-          getBrowserAudioContextConstructor()
-            ? "pending_gesture"
-            : "unsupported",
-        );
+        setKitchenBellState(hasKitchenBellSupport() ? "pending_gesture" : "unsupported");
       });
     }
   }, [activeKitchenId, boardQuery.data, newOrderSoundEnabled]);
@@ -1429,30 +1362,57 @@ export function DashboardClient({
                                       (() => {
                                         const isCanceled =
                                           item.externalStatus?.kind === "canceled";
+                                        const observation = getItemObservation(item);
 
                                         return (
                                           <div
                                             className={cn(
-                                              "flex items-center justify-between gap-3 rounded-2xl border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2",
+                                              "rounded-2xl border border-[var(--panel-border)] bg-[var(--panel)] px-3 py-2",
                                               isCanceled &&
                                                 "border-[color-mix(in_oklab,var(--accent-hot)_42%,white)] bg-[color-mix(in_oklab,var(--accent-hot)_8%,white)]",
                                             )}
                                             key={item.id}
                                           >
                                             <div className="space-y-2">
-                                              <p
-                                                className={cn(
-                                                  "text-sm font-semibold text-[var(--ink-strong)]",
-                                                  isCanceled &&
-                                                    "text-[var(--accent-hot)] line-through decoration-2",
-                                                )}
-                                              >
-                                                {item.name}
-                                              </p>
-                                              <ItemQuantityPill
-                                                quantity={item.quantity}
-                                                size="compact"
-                                              />
+                                              <div className="flex items-center justify-between gap-3">
+                                                <div className="space-y-2">
+                                                  <p
+                                                    className={cn(
+                                                      "text-sm font-semibold text-[var(--ink-strong)]",
+                                                      isCanceled &&
+                                                        "text-[var(--accent-hot)] line-through decoration-2",
+                                                    )}
+                                                  >
+                                                    {item.name}
+                                                  </p>
+                                                  <ItemQuantityPill
+                                                    quantity={item.quantity}
+                                                    size="compact"
+                                                  />
+                                                </div>
+                                                <div className="flex flex-wrap items-center justify-end gap-2">
+                                                  {item.externalStatus ? (
+                                                    <ExternalItemStatusPill
+                                                      detail={item.externalStatus.detail}
+                                                      kind={item.externalStatus.kind}
+                                                      label={item.externalStatus.label}
+                                                    />
+                                                  ) : null}
+                                                  {!isCanceled ? (
+                                                    <StatusBadge
+                                                      label={getItemStatusLabel(item.status)}
+                                                      status={item.status}
+                                                    />
+                                                  ) : null}
+                                                </div>
+                                              </div>
+                                              {observation ? (
+                                                <ItemObservationCallout
+                                                  observation={observation}
+                                                  size="compact"
+                                                  tone="light"
+                                                />
+                                              ) : null}
                                               {item.externalStatus?.detail ? (
                                                 <p
                                                   className={cn(
@@ -1464,21 +1424,6 @@ export function DashboardClient({
                                                 >
                                                   {item.externalStatus.detail}
                                                 </p>
-                                              ) : null}
-                                            </div>
-                                            <div className="flex flex-wrap items-center justify-end gap-2">
-                                              {item.externalStatus ? (
-                                                <ExternalItemStatusPill
-                                                  detail={item.externalStatus.detail}
-                                                  kind={item.externalStatus.kind}
-                                                  label={item.externalStatus.label}
-                                                />
-                                              ) : null}
-                                              {!isCanceled ? (
-                                                <StatusBadge
-                                                  label={getItemStatusLabel(item.status)}
-                                                  status={item.status}
-                                                />
                                               ) : null}
                                             </div>
                                           </div>

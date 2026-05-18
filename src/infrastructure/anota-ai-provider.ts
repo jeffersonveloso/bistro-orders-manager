@@ -558,6 +558,7 @@ function normalizeAnotaCatalogItem(
     readOptionalString(item.name) ??
     readOptionalString(item.title) ??
     readOptionalString(item.description);
+  const description = readOptionalString(item.description);
 
   if (!providerItemId) {
     throw new UnsupportedAnotaPayloadError(
@@ -580,6 +581,7 @@ function normalizeAnotaCatalogItem(
       readOptionalString(item.externalID) ??
       null,
     name,
+    description: description ?? null,
     updatedAt:
       normalizeOptionalDateTime(item.updatedAt) ??
       normalizeOptionalDateTime(item.updated_at) ??
@@ -807,7 +809,9 @@ function normalizeAnotaOrderList(
 
   return {
     docs,
-    count: normalizeCount(info.count, "Anota AI order list count"),
+    count: normalizeCount(info.count, "Anota AI order list count", {
+      minimum: 0,
+    }),
     limit: normalizeCount(info.limit, "Anota AI order list limit"),
   };
 }
@@ -1092,20 +1096,29 @@ function resolveAnotaCatalogListPaths(catalogListPath?: string) {
   return [...DEFAULT_ANOTA_AI_CATALOG_LIST_PATHS];
 }
 
-function normalizeCount(value: unknown, fieldName: string) {
-  if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+function normalizeCount(
+  value: unknown,
+  fieldName: string,
+  options: {
+    minimum?: number;
+  } = {},
+) {
+  const minimum = options.minimum ?? 1;
+  const minimumLabel = minimum <= 0 ? "a non-negative integer" : "a positive integer";
+
+  if (typeof value === "number" && Number.isInteger(value) && value >= minimum) {
     return value;
   }
 
   if (typeof value === "string") {
     const parsedValue = Number.parseInt(value, 10);
 
-    if (Number.isInteger(parsedValue) && parsedValue > 0) {
+    if (Number.isInteger(parsedValue) && parsedValue >= minimum) {
       return parsedValue;
     }
   }
 
-  throw new UnsupportedAnotaPayloadError(`${fieldName} must be a positive integer`);
+  throw new UnsupportedAnotaPayloadError(`${fieldName} must be ${minimumLabel}`);
 }
 
 function normalizeOptionalCount(value: unknown) {

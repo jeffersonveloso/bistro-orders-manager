@@ -123,6 +123,8 @@ function createCatalogRepositorySpy(): CatalogMappingRepository {
     listKitchens: vi.fn(() => []),
     listKitchenMappings: vi.fn(() => []),
     upsertKitchenMapping: vi.fn(),
+    listProviderCatalogItems: vi.fn(() => []),
+    upsertProviderCatalogItems: vi.fn(),
     listProviderOrders: vi.fn(() => []),
     listUnresolvedSyncExceptions: vi.fn(() => []),
   };
@@ -277,7 +279,11 @@ describe("catalog API route protection", () => {
     });
     const repository = {
       listKitchenMappings: vi.fn(() => []),
-    } satisfies Pick<CatalogMappingRepository, "listKitchenMappings">;
+      upsertProviderCatalogItems: vi.fn(),
+    } satisfies Pick<
+      CatalogMappingRepository,
+      "listKitchenMappings" | "upsertProviderCatalogItems"
+    >;
 
     const response = await handlePostProviderCatalogPullRoute(
       createJsonRequest(
@@ -579,7 +585,11 @@ describe("catalog API direct handlers", () => {
     });
     const repository = {
       listKitchenMappings: vi.fn(() => []),
-    } satisfies Pick<CatalogMappingRepository, "listKitchenMappings">;
+      upsertProviderCatalogItems: vi.fn(),
+    } satisfies Pick<
+      CatalogMappingRepository,
+      "listKitchenMappings" | "upsertProviderCatalogItems"
+    >;
 
     const response = await handlePostProviderCatalogPull(
       createJsonRequest("/api/catalog/provider-pull", {
@@ -618,7 +628,11 @@ describe("catalog API direct handlers", () => {
     });
     const repository = {
       listKitchenMappings: vi.fn(() => []),
-    } satisfies Pick<CatalogMappingRepository, "listKitchenMappings">;
+      upsertProviderCatalogItems: vi.fn(),
+    } satisfies Pick<
+      CatalogMappingRepository,
+      "listKitchenMappings" | "upsertProviderCatalogItems"
+    >;
 
     const response = await handlePostProviderCatalogPull(
       createJsonRequest("/api/catalog/provider-pull", {
@@ -651,7 +665,11 @@ describe("catalog API direct handlers", () => {
     });
     const repository = {
       listKitchenMappings: vi.fn(() => []),
-    } satisfies Pick<CatalogMappingRepository, "listKitchenMappings">;
+      upsertProviderCatalogItems: vi.fn(),
+    } satisfies Pick<
+      CatalogMappingRepository,
+      "listKitchenMappings" | "upsertProviderCatalogItems"
+    >;
 
     const response = await handlePostProviderCatalogPull(
       createJsonRequest("/api/catalog/provider-pull", {
@@ -692,7 +710,11 @@ describe("catalog API direct handlers", () => {
     });
     const repository = {
       listKitchenMappings: vi.fn(() => []),
-    } satisfies Pick<CatalogMappingRepository, "listKitchenMappings">;
+      upsertProviderCatalogItems: vi.fn(),
+    } satisfies Pick<
+      CatalogMappingRepository,
+      "listKitchenMappings" | "upsertProviderCatalogItems"
+    >;
 
     const response = await handlePostProviderCatalogPull(
       createJsonRequest("/api/catalog/provider-pull", {}),
@@ -725,6 +747,7 @@ describe("catalog API direct handlers", () => {
         provider,
         repository: {
           listKitchenMappings: vi.fn(() => []),
+          upsertProviderCatalogItems: vi.fn(),
         },
       },
     );

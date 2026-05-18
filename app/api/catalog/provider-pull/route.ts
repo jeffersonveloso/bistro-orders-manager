@@ -21,7 +21,10 @@ export const dynamic = "force-dynamic";
 export interface ProviderCatalogPullRouteDependencies
   extends AreaAccessRouteDependencies {
   provider?: CatalogAdminProviderPort;
-  repository?: Pick<CatalogMappingRepository, "listKitchenMappings">;
+  repository?: Pick<
+    CatalogMappingRepository,
+    "listKitchenMappings" | "upsertProviderCatalogItems"
+  >;
 }
 
 export async function handlePostProviderCatalogPull(

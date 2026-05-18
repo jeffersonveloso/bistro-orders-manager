@@ -328,6 +328,7 @@ describe("anota ai provider", () => {
               {
                 id: "catalog-item-1",
                 title: "Club Sandwich",
+                description: "Pão brioche, frango e maionese da casa.",
                 external_id: "club-sandwich",
                 updatedAt: "2026-05-12T12:00:00.000Z",
               },
@@ -360,10 +361,12 @@ describe("anota ai provider", () => {
         providerItemId: "catalog-item-1",
         providerExternalId: "club-sandwich",
         name: "Club Sandwich",
+        description: "Pão brioche, frango e maionese da casa.",
         updatedAt: "2026-05-12T12:00:00.000Z",
         rawPayload: {
           id: "catalog-item-1",
           title: "Club Sandwich",
+          description: "Pão brioche, frango e maionese da casa.",
           external_id: "club-sandwich",
           updatedAt: "2026-05-12T12:00:00.000Z",
         },
@@ -373,6 +376,7 @@ describe("anota ai provider", () => {
         providerItemId: "catalog-item-2",
         providerExternalId: null,
         name: "Bolo secreto",
+        description: null,
         updatedAt: "2026-05-12T12:01:00.000Z",
         rawPayload: {
           productId: "catalog-item-2",
@@ -764,6 +768,39 @@ describe("anota ai provider", () => {
         token: "   ",
       }),
     ).toThrowError(/token is required/i);
+  });
+
+  it("accepts an empty confirmed-order page when the provider reports count zero", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.endsWith("/ping/list?currentpage=1")) {
+        return createJsonResponse({
+          success: true,
+          info: {
+            docs: [],
+            count: 0,
+            limit: 100,
+            currentpage: 1,
+          },
+        });
+      }
+
+      throw new Error(`unexpected url ${url}`);
+    });
+    const provider = createAnotaAiProvider({
+      fetch: fetchMock as typeof fetch,
+      token: "token-123",
+    });
+
+    await expect(provider.listConfirmedOrders({ limit: 5 })).resolves.toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        href: "https://api-parceiros.anota.ai/partnerauth/ping/list?currentpage=1",
+      }),
+      expect.any(Object),
+    );
   });
 
   it("surfaces request failures, non-object envelopes, and missing required identifiers descriptively", async () => {

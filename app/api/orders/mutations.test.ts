@@ -140,6 +140,72 @@ describe("order mutation API handlers", () => {
     }
   });
 
+  it("allows reverting the last active item back to new and clears the kitchen start marker", async () => {
+    const context = createProductionTestContext({
+      importProviderOrders: true,
+    });
+    const orderId = "order_anota-101";
+    const itemId = "order_anota-101__101-1";
+
+    try {
+      const startResponse = handlePatchOrderItem(context.repository, {
+        itemId,
+        orderId,
+        status: "in_preparation",
+      });
+
+      expect(startResponse.status).toBe(200);
+      expect(readKitchenTicketRow(context, orderId, "kitchen-1")?.startedAt).toEqual(
+        expect.any(String),
+      );
+
+      const revertResponse = handlePatchOrderItem(context.repository, {
+        itemId,
+        orderId,
+        status: "new",
+      });
+
+      expect(revertResponse.status).toBe(200);
+      expect(readOrderItemRow(context, itemId)?.status).toBe("new");
+      expect(readKitchenTicketRow(context, orderId, "kitchen-1")?.startedAt).toBeNull();
+    } finally {
+      context.close();
+    }
+  });
+
+  it("allows correcting a ready item back to in preparation", async () => {
+    const context = createProductionTestContext({
+      importProviderOrders: true,
+    });
+    const orderId = "order_anota-101";
+    const itemId = "order_anota-101__101-3";
+
+    try {
+      const readyResponse = handlePatchOrderItem(context.repository, {
+        itemId,
+        orderId,
+        status: "ready",
+      });
+
+      expect(readyResponse.status).toBe(200);
+      expect(readOrderItemRow(context, itemId)?.status).toBe("ready");
+
+      const correctionResponse = handlePatchOrderItem(context.repository, {
+        itemId,
+        orderId,
+        status: "in_preparation",
+      });
+
+      expect(correctionResponse.status).toBe(200);
+      expect(readOrderItemRow(context, itemId)?.status).toBe("in_preparation");
+      expect(readKitchenTicketRow(context, orderId, "kitchen-2")?.startedAt).toEqual(
+        expect.any(String),
+      );
+    } finally {
+      context.close();
+    }
+  });
+
   it("returns 400 for invalid item status payloads", async () => {
     const context = createProductionTestContext({
       importProviderOrders: true,

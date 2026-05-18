@@ -127,13 +127,17 @@ function createCatalogItem(
   name: string,
   overrides: Partial<ProviderCatalogItem> = {},
 ): ProviderCatalogItem {
+  const description =
+    typeof overrides.description === "string" ? overrides.description : null;
+
   return {
     provider: "anota_ai",
     providerItemId,
     providerExternalId: null,
     name,
+    description,
     updatedAt: "2026-05-12T12:00:00.000Z",
-    rawPayload: { id: providerItemId, name },
+    rawPayload: { id: providerItemId, name, description },
     ...overrides,
   };
 }
@@ -285,9 +289,11 @@ describe("catalog mapping service", () => {
     const catalogAdminProvider = createMutableCatalogAdminProvider([
       createCatalogItem("provider-item-club-sandwich", "Club Sandwich", {
         providerExternalId: "club-sandwich",
+        description: "Pão brioche, frango e maionese da casa.",
         updatedAt: "2026-05-12T12:01:00.000Z",
       }),
       createCatalogItem("provider-item-secret-cake", "Bolo secreto", {
+        description: "Receita da vitrine do dia.",
         providerExternalId: null,
         updatedAt: "2026-05-12T12:02:00.000Z",
       }),
@@ -306,6 +312,7 @@ describe("catalog mapping service", () => {
             providerItemId: "provider-item-club-sandwich",
             providerExternalId: "club-sandwich",
             latestName: "Club Sandwich",
+            latestDescription: "Pão brioche, frango e maionese da casa.",
             status: "needs_mapping",
             seenOrderCount: 0,
           }),
@@ -313,6 +320,7 @@ describe("catalog mapping service", () => {
             providerItemId: "provider-item-secret-cake",
             providerExternalId: null,
             latestName: "Bolo secreto",
+            latestDescription: "Receita da vitrine do dia.",
             status: "missing_external_id",
             seenOrderCount: 0,
           }),
@@ -323,6 +331,74 @@ describe("catalog mapping service", () => {
         fetchedItemCount: 2,
         status: "loaded",
       });
+    } finally {
+      context.close();
+    }
+  });
+
+  it("persists provider catalog updates locally and reuses them on later reads", async () => {
+    const context = createProductionTestContext({
+      initialKitchenMappings: [
+        {
+          kitchenId: "kitchen-2",
+          menuItemId: "uuid-club-sandwich",
+          menuItemName: "Club Sandwich",
+          providerItemId: "provider-item-club-sandwich",
+          providerExternalId: "club-sandwich",
+        },
+      ],
+    });
+
+    try {
+      await getCatalogMappingPageDataFromProvider({
+        catalogAdminProvider: createMutableCatalogAdminProvider([
+          createCatalogItem("provider-item-club-sandwich", "Club Sandwich", {
+            providerExternalId: "club-sandwich",
+            description: "Versão inicial do catálogo.",
+            updatedAt: "2026-05-12T12:00:00.000Z",
+          }),
+        ]),
+        repository: context.repository,
+      });
+
+      await getCatalogMappingPageDataFromProvider({
+        catalogAdminProvider: createMutableCatalogAdminProvider([
+          createCatalogItem(
+            "provider-item-club-sandwich",
+            "Club Sandwich defumado",
+            {
+              providerExternalId: "club-sandwich",
+              description: "Pão brioche, frango defumado e molho da casa.",
+              updatedAt: "2026-05-12T13:00:00.000Z",
+            },
+          ),
+        ]),
+        repository: context.repository,
+      });
+
+      expect(context.repository.listProviderCatalogItems()).toEqual([
+        expect.objectContaining({
+          providerItemId: "provider-item-club-sandwich",
+          providerExternalId: "club-sandwich",
+          name: "Club Sandwich defumado",
+          description: "Pão brioche, frango defumado e molho da casa.",
+          updatedAt: "2026-05-12T13:00:00.000Z",
+        }),
+      ]);
+
+      const data = getCatalogMappingPageData(context.repository);
+
+      expect(data.mappings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            menuItemId: "uuid-club-sandwich",
+            providerCatalogName: "Club Sandwich defumado",
+            providerCatalogDescription:
+              "Pão brioche, frango defumado e molho da casa.",
+            providerCatalogUpdatedAt: "2026-05-12T13:00:00.000Z",
+          }),
+        ]),
+      );
     } finally {
       context.close();
     }
@@ -414,6 +490,35 @@ describe("catalog mapping service", () => {
           }),
         ]),
       );
+    } finally {
+      context.close();
+    }
+  });
+
+  it("updates the local catalog cache during manual provider pulls", async () => {
+    const provider = createMutableCatalogAdminProvider([
+      createCatalogItem("provider-item-brownie", "Brownie intenso", {
+        providerExternalId: "brownie-intenso",
+        description: "Chocolate 70% e noz-pecã.",
+        updatedAt: "2026-05-12T12:08:00.000Z",
+      }),
+    ]);
+    const context = createProductionTestContext();
+
+    try {
+      await previewProviderCatalogPull({
+        provider,
+        repository: context.repository,
+      });
+
+      expect(context.repository.listProviderCatalogItems()).toEqual([
+        expect.objectContaining({
+          providerItemId: "provider-item-brownie",
+          name: "Brownie intenso",
+          description: "Chocolate 70% e noz-pecã.",
+          providerExternalId: "brownie-intenso",
+        }),
+      ]);
     } finally {
       context.close();
     }

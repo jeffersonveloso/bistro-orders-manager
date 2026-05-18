@@ -935,6 +935,189 @@ describe("provider sync service", () => {
     }
   });
 
+  it("keeps imported item names bound to the original provider payload even when mappings or cached catalog names change later", async () => {
+    const snapshot = createSnapshot("external-payload-names", {
+      items: [
+        {
+          externalItemId: "external-payload-names-drink",
+          catalogExternalId: "iced-coffee",
+          name: "Café gelado do payload",
+          quantity: 1,
+          notes: "Sem açúcar",
+          modifiers: [],
+        },
+        {
+          externalItemId: "external-payload-names-bakery",
+          catalogExternalId: "croissant",
+          name: "Croissant amanteigado do payload",
+          quantity: 1,
+          modifiers: [],
+        },
+      ],
+    });
+    const provider = createMutableSyncProvider([snapshot]);
+    const context = createProductionTestContext({
+      initialKitchenMappings: [
+        {
+          kitchenId: "kitchen-1",
+          menuItemId: "local-iced-coffee-id",
+          menuItemName: "Café antigo no mapping",
+          providerExternalId: "iced-coffee",
+        },
+        {
+          kitchenId: "kitchen-2",
+          menuItemId: "local-croissant-id",
+          menuItemName: "Croissant antigo no mapping",
+          providerExternalId: "croissant",
+        },
+      ],
+    });
+    const service = createProviderSyncService({
+      provider,
+      repository: context.repository,
+    });
+
+    try {
+      context.repository.upsertProviderCatalogItems([
+        {
+          provider: "anota_ai",
+          providerItemId: "catalog-item-iced-coffee",
+          providerExternalId: "iced-coffee",
+          name: "Café antigo no cache",
+          description: "Descrição antiga do cache.",
+          updatedAt: "2026-05-11T11:50:00.000Z",
+          rawPayload: { id: "catalog-item-iced-coffee", version: 1 },
+        },
+        {
+          provider: "anota_ai",
+          providerItemId: "catalog-item-croissant",
+          providerExternalId: "croissant",
+          name: "Croissant antigo no cache",
+          description: "Descrição antiga do cache.",
+          updatedAt: "2026-05-11T11:51:00.000Z",
+          rawPayload: { id: "catalog-item-croissant", version: 1 },
+        },
+      ]);
+
+      const imported = await service.handleWebhook({
+        provider: "anota_ai",
+        deliveryKey: "delivery-payload-names-1",
+        eventType: "order.confirmed",
+        externalOrderId: snapshot.externalOrderId,
+        payload: { id: snapshot.externalOrderId },
+      });
+
+      expect(
+        context.repository
+          .getOrderAggregate(imported.orderId!)
+          ?.items.find(
+            (item) => item.externalItemId === "external-payload-names-drink",
+          ),
+      ).toEqual(
+        expect.objectContaining({
+          menuItemId: "local-iced-coffee-id",
+          name: "Café gelado do payload",
+          notes: "Sem açúcar",
+        }),
+      );
+      expect(
+        context.repository
+          .getOrderAggregate(imported.orderId!)
+          ?.items.find(
+            (item) => item.externalItemId === "external-payload-names-bakery",
+          ),
+      ).toEqual(
+        expect.objectContaining({
+          menuItemId: "local-croissant-id",
+          name: "Croissant amanteigado do payload",
+        }),
+      );
+
+      context.repository.upsertKitchenMapping({
+        kitchenId: "kitchen-1",
+        menuItemId: "local-iced-coffee-id",
+        menuItemName: "Café renomeado no mapping",
+        providerExternalId: "iced-coffee",
+      });
+      context.repository.upsertKitchenMapping({
+        kitchenId: "kitchen-2",
+        menuItemId: "local-croissant-id",
+        menuItemName: "Croissant renomeado no mapping",
+        providerExternalId: "croissant",
+      });
+      context.repository.upsertProviderCatalogItems([
+        {
+          provider: "anota_ai",
+          providerItemId: "catalog-item-iced-coffee",
+          providerExternalId: "iced-coffee",
+          name: "Café renomeado no cache",
+          description: "Descrição nova no cache.",
+          updatedAt: "2026-05-11T12:09:00.000Z",
+          rawPayload: { id: "catalog-item-iced-coffee", version: 2 },
+        },
+        {
+          provider: "anota_ai",
+          providerItemId: "catalog-item-croissant",
+          providerExternalId: "croissant",
+          name: "Croissant renomeado no cache",
+          description: "Descrição nova no cache.",
+          updatedAt: "2026-05-11T12:09:30.000Z",
+          rawPayload: { id: "catalog-item-croissant", version: 2 },
+        },
+      ]);
+      provider.setSnapshot(
+        createSnapshot("external-payload-names", {
+          providerUpdatedAt: "2026-05-11T12:10:00.000Z",
+          items: [
+            {
+              externalItemId: "external-payload-names-drink",
+              catalogExternalId: "iced-coffee",
+              name: "Café gelado do payload",
+              quantity: 1,
+              notes: "Sem açúcar",
+              modifiers: [],
+            },
+            {
+              externalItemId: "external-payload-names-bakery",
+              catalogExternalId: "croissant",
+              name: "Croissant amanteigado do payload",
+              quantity: 1,
+              modifiers: [],
+            },
+          ],
+        }),
+      );
+
+      const replay = await service.reconcileConfirmedOrders({
+        provider: "anota_ai",
+        externalOrderId: snapshot.externalOrderId,
+      });
+      const aggregateAfterReplay = context.repository.getOrderAggregate(
+        imported.orderId!,
+      );
+
+      expect(replay).toEqual(
+        expect.objectContaining({
+          status: "completed",
+          imported: 0,
+          errorCount: 0,
+        }),
+      );
+      expect(
+        aggregateAfterReplay?.items.find(
+          (item) => item.externalItemId === "external-payload-names-drink",
+        )?.name,
+      ).toBe("Café gelado do payload");
+      expect(
+        aggregateAfterReplay?.items.find(
+          (item) => item.externalItemId === "external-payload-names-bakery",
+        )?.name,
+      ).toBe("Croissant amanteigado do payload");
+    } finally {
+      context.close();
+    }
+  });
+
   it("detects item removal by routing key when Anota reuses the same line identifier for multiple items", async () => {
     const snapshot = createSnapshot("external-duplicate-line-ids", {
       items: [
