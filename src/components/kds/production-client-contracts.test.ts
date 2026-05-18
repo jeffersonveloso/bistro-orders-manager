@@ -145,6 +145,7 @@ describe("production client contracts", () => {
       expect(dashboardMarkup).toContain('data-testid="board-toggle-filters"');
       expect(dashboardMarkup).toContain('data-testid="board-new-orders-badge"');
       expect(dashboardMarkup).toContain('data-testid="board-toggle-order-bell"');
+      expect(dashboardMarkup).not.toContain("Campainha desligada");
       expect(salonMarkup).toContain('data-testid="switch-area-action"');
       expect(orderDetailMarkup).toContain('data-testid="open-catalog-action"');
       expect(orderDetailMarkup).toContain('data-testid="switch-area-action"');
@@ -197,6 +198,7 @@ describe("production client contracts", () => {
     });
 
     try {
+      const dashboardData = getDashboardData(context.repository);
       const orderDetailData = getOrderDetailData(
         context.repository,
         "order_anota-101",
@@ -207,10 +209,35 @@ describe("production client contracts", () => {
         throw new Error("Expected order detail data for waiter regression");
       }
 
+      const kitchenBoard = dashboardData.kitchens.find(
+        (kitchen) => kitchen.id === "kitchen-1",
+      );
+      const hiddenNewColumn = kitchenBoard?.columns.find(
+        (column) => column.status === "new",
+      );
+      const visibleReadyColumn = kitchenBoard?.columns.find(
+        (column) => column.status === "ready",
+      );
+      const visibleDashboardTicket = hiddenNewColumn?.tickets.at(0) ?? null;
+
+      if (!hiddenNewColumn || !visibleReadyColumn || !visibleDashboardTicket) {
+        throw new Error("Expected dashboard ticket data for waiter regression");
+      }
+
+      hiddenNewColumn.tickets = hiddenNewColumn.tickets.filter(
+        (ticket) => ticket !== visibleDashboardTicket,
+      );
+      visibleDashboardTicket.ticketStatus = "ready";
+      visibleDashboardTicket.ticketStatusLabel = "Pronto";
+      visibleDashboardTicket.orderStatus = "in_progress";
+      visibleDashboardTicket.orderStatusLabel = "Em andamento";
+      visibleDashboardTicket.waiterName = "Clara";
+      visibleReadyColumn.tickets.unshift(visibleDashboardTicket);
+
       const dashboardMarkup = renderClient(
         createElement(DashboardClient, {
           activeKitchenId: "kitchen-1",
-          initialData: getDashboardData(context.repository),
+          initialData: dashboardData,
         }),
       );
       const orderDetailMarkup = renderClient(
@@ -250,9 +277,10 @@ describe("production client contracts", () => {
       const dashboardItem =
         dashboardData.kitchens
           .flatMap((kitchen) => kitchen.columns)
+          .filter((column) => column.status !== "new" && column.status !== "canceled")
           .flatMap((column) => column.tickets)
           .flatMap((ticket) => ticket.currentItems)
-          .find((item) => item.id === "order_anota-101__101-1") ?? null;
+          .find((item) => item.notes || item.observation || item.name.length > 0) ?? null;
 
       if (!dashboardItem) {
         throw new Error("Expected dashboard item data for observation regression");
@@ -412,7 +440,7 @@ describe("production client contracts", () => {
     expect(markup).toContain("Mesa pronta 2");
   });
 
-  it("renders visibility toggles, hides the canceled column by default, and paginates ticket lists", () => {
+  it("renders visibility toggles, keeps active alert states explicit, and hides non-operational columns by default", () => {
     const makeTicket = (index: number, status: "new" | "canceled" = "new") => ({
       orderId: `order-${index}`,
       ticketId: `ticket-${index}`,
@@ -441,7 +469,7 @@ describe("production client contracts", () => {
         partiallyReadyOrders: 0,
         readyToServeOrders: 0,
       },
-      openSyncExceptions: 0,
+      openSyncExceptions: 1,
       salonSummary: Array.from({ length: 7 }, (_, index) => ({
         orderId: `order-${index + 1}`,
         reference: `Pedido ${index + 1}`,
@@ -453,7 +481,24 @@ describe("production client contracts", () => {
         syncException: null,
         ticketBreakdown: [],
       })),
-      syncAlerts: [],
+      syncAlerts: [
+        {
+          id: "sync-alert-1",
+          label: "Mudança externa",
+          statusLabel: "Ação pendente",
+          summary: "O pedido foi alterado no provedor e precisa de conferência.",
+          detail: "Item removido na plataforma externa.",
+          status: "open",
+          orderId: "order-2",
+          externalOrderId: "provider-2",
+          reference: "Pedido 2",
+          customerName: "Mesa 2",
+          waiterName: "Garçom 2",
+          focusKitchenId: "kitchen-1",
+          detectedAt: "2026-05-13T12:00:00.000Z",
+          lastSeenAt: "2026-05-13T12:01:00.000Z",
+        },
+      ],
       kitchens: [
         {
           id: "kitchen-1",
@@ -494,11 +539,14 @@ describe("production client contracts", () => {
       }),
     );
 
+    expect(markup).not.toContain('data-testid="board-column-kitchen-1-new"');
     expect(markup).not.toContain('data-testid="board-column-kitchen-1-canceled"');
+    expect(markup).toContain('data-testid="board-toggle-column-new"');
     expect(markup).toContain('data-testid="board-toggle-column-canceled"');
+    expect(markup).toContain('data-testid="board-toggle-sync-alerts"');
+    expect(markup).toContain("Alertas visíveis");
+    expect(markup).toContain('data-testid="board-sync-alerts"');
     expect(markup).toContain('data-testid="board-toggle-kitchen-kitchen-1"');
-    expect(markup).toContain('data-testid="board-column-page-kitchen-1-new"');
-    expect(markup).toContain("Mostrando 1-4 de 6");
     expect(markup).toContain("Cozinha 1");
     expect(markup).not.toContain("Kitchen 1");
   });

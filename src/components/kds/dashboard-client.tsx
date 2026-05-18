@@ -128,7 +128,7 @@ type BoardColumnStatus = DashboardData["kitchens"][number]["columns"][number]["s
 const defaultColumnVisibility: Record<BoardColumnStatus, boolean> = {
   canceled: false,
   in_preparation: true,
-  new: true,
+  new: false,
   ready: true,
 };
 const boardColumnStatuses = Object.keys(
@@ -142,7 +142,6 @@ interface DashboardPreferences {
   columnVisibility?: Partial<Record<BoardColumnStatus, boolean>>;
   customerFilter?: string;
   kitchenVisibility?: Partial<Record<KitchenAreaId, boolean>>;
-  newOrderSoundEnabled?: boolean;
   pageSize?: 4 | 6 | 8;
   referenceFilter?: string;
   showFilterPanel?: boolean;
@@ -560,10 +559,6 @@ export function DashboardClient({
         setShowSyncAlerts(preferences.showSyncAlerts);
       }
 
-      if (typeof preferences.newOrderSoundEnabled === "boolean") {
-        setNewOrderSoundEnabled(preferences.newOrderSoundEnabled);
-      }
-
       if (preferences.columnVisibility) {
         setColumnVisibility((current) => {
           const next = { ...current };
@@ -611,7 +606,6 @@ export function DashboardClient({
       columnVisibility,
       customerFilter,
       kitchenVisibility,
-      newOrderSoundEnabled,
       pageSize,
       referenceFilter,
       showFilterPanel,
@@ -621,7 +615,6 @@ export function DashboardClient({
       columnVisibility,
       customerFilter,
       kitchenVisibility,
-      newOrderSoundEnabled,
       pageSize,
       referenceFilter,
       showFilterPanel,
@@ -643,6 +636,10 @@ export function DashboardClient({
   }, [activeKitchenId]);
 
   useEffect(() => {
+    if (newOrderSoundEnabled) {
+      void armKitchenBell();
+    }
+
     const unlockBell = () => {
       if (!newOrderSoundEnabled) {
         return;
@@ -1111,7 +1108,9 @@ export function DashboardClient({
                       ) : (
                         <EyeOff className="size-4" />
                       )}
-                      {showSyncAlerts ? "Ocultar alertas" : "Mostrar alertas"}
+                      {showSyncAlerts
+                        ? "Alertas visíveis"
+                        : "Alertas ocultos"}
                     </Button>
                   ) : (
                     <div className="rounded-full border border-[var(--panel-border)] bg-white/75 px-4 py-2 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--ink-muted)]">
