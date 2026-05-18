@@ -636,9 +636,11 @@ export function DashboardClient({
   }, [activeKitchenId]);
 
   useEffect(() => {
-    if (newOrderSoundEnabled) {
-      void armKitchenBell();
-    }
+    const initialArmTimeoutId = newOrderSoundEnabled
+      ? window.setTimeout(() => {
+          void armKitchenBell();
+        }, 0)
+      : null;
 
     const unlockBell = () => {
       if (!newOrderSoundEnabled) {
@@ -652,6 +654,10 @@ export function DashboardClient({
     window.addEventListener("keydown", unlockBell);
 
     return () => {
+      if (initialArmTimeoutId !== null) {
+        window.clearTimeout(initialArmTimeoutId);
+      }
+
       window.removeEventListener("pointerdown", unlockBell);
       window.removeEventListener("keydown", unlockBell);
 
