@@ -1,20 +1,29 @@
 import {
   AREA_SESSION_VERSION,
+  areaIds,
   getCanonicalAreaPath,
   getCanonicalKitchenOrderPath,
+  hasAreaAccess,
+  isElevatedAccessRole,
   isKitchenArea,
+  isKitchenAreaId,
+  type AccessRole,
   type AreaId,
   type AreaSession,
   type KitchenAreaId,
 } from "@/src/domain/area-access";
 
 export interface AreaAccessPolicyConfig {
+  elevatedPins?: Partial<Record<Extract<AccessRole, "manager" | "admin">, string>>;
   pins: Record<AreaId, string>;
   sessionTtlMs: number;
 }
 
 export interface AreaAccessService {
   authenticate(areaId: AreaId, pin: string): AreaSession;
+  requireElevatedAccess(
+    session: AreaSession,
+  ): Extract<AccessRole, "manager" | "admin">;
   requireKitchenArea(session: AreaSession): KitchenAreaId;
   requireSalonArea(session: AreaSession): void;
   resolveFocusKitchen(
@@ -48,22 +57,38 @@ export function createAreaAccessService(
 ): AreaAccessService {
   return {
     authenticate(areaId, pin) {
-      const expectedPin = config.pins[areaId];
       const receivedPin = normalizePin(pin);
+      const elevatedRole = resolveElevatedAccessRole(config, receivedPin);
+
+      if (elevatedRole) {
+        return buildAuthenticatedSession({
+          areaId,
+          getNow,
+          role: elevatedRole,
+          sessionTtlMs: config.sessionTtlMs,
+        });
+      }
+
+      const expectedPin = config.pins[areaId];
 
       if (!expectedPin || !receivedPin || receivedPin !== expectedPin) {
         throw new AreaAuthenticationError();
       }
 
-      const issuedAt = getNow();
-      const expiresAt = new Date(issuedAt.getTime() + config.sessionTtlMs);
-
-      return {
+      return buildAuthenticatedSession({
         areaId,
-        issuedAt: issuedAt.toISOString(),
-        expiresAt: expiresAt.toISOString(),
-        version: AREA_SESSION_VERSION,
-      };
+        getNow,
+        role: "station",
+        sessionTtlMs: config.sessionTtlMs,
+      });
+    },
+
+    requireElevatedAccess(session) {
+      if (!isElevatedAccessRole(session.role)) {
+        throw new AreaAuthorizationError();
+      }
+
+      return session.role as Extract<AccessRole, "manager" | "admin">;
     },
 
     requireKitchenArea(session) {
@@ -75,7 +100,10 @@ export function createAreaAccessService(
     },
 
     requireSalonArea(session) {
-      if (session.areaId !== "salon") {
+      if (
+        session.areaId !== "salon" &&
+        (!isElevatedAccessRole(session.role) || !hasAreaAccess(session, "salon"))
+      ) {
         throw new AreaAuthorizationError();
       }
     },
@@ -83,15 +111,26 @@ export function createAreaAccessService(
     resolveFocusKitchen(session, requestedKitchenId) {
       const kitchenId = this.requireKitchenArea(session);
 
-      if (
-        typeof requestedKitchenId === "string" &&
-        requestedKitchenId.length > 0 &&
-        requestedKitchenId !== kitchenId
-      ) {
+      if (!requestedKitchenId || requestedKitchenId.length === 0) {
+        return kitchenId;
+      }
+
+      if (!isKitchenAreaId(requestedKitchenId)) {
         throw new AreaAuthorizationError();
       }
 
-      return kitchenId;
+      if (requestedKitchenId === kitchenId) {
+        return kitchenId;
+      }
+
+      if (
+        isElevatedAccessRole(session.role) &&
+        hasAreaAccess(session, requestedKitchenId)
+      ) {
+        return requestedKitchenId;
+      }
+
+      throw new AreaAuthorizationError();
     },
 
     resolveNextTarget(session, next) {
@@ -102,11 +141,27 @@ export function createAreaAccessService(
         return fallbackPath;
       }
 
-      if (session.areaId === "salon") {
-        return parsedTarget.pathname === "/salon" &&
-          parsedTarget.searchParams.size === 0
+      if (
+        parsedTarget.pathname === "/catalog" &&
+        parsedTarget.searchParams.size === 0
+      ) {
+        return isKitchenArea(session.areaId) || isElevatedAccessRole(session.role)
+          ? "/catalog"
+          : fallbackPath;
+      }
+
+      if (
+        parsedTarget.pathname === "/salon" &&
+        parsedTarget.searchParams.size === 0
+      ) {
+        return session.areaId === "salon" ||
+          (isElevatedAccessRole(session.role) && hasAreaAccess(session, "salon"))
           ? "/salon"
           : fallbackPath;
+      }
+
+      if (session.areaId === "salon") {
+        return fallbackPath;
       }
 
       if (parsedTarget.pathname === "/" && parsedTarget.searchParams.size === 0) {
@@ -121,14 +176,20 @@ export function createAreaAccessService(
 
       if (
         [...parsedTarget.searchParams.keys()].some((key) => key !== "kitchen") ||
-        (requestedKitchenId && requestedKitchenId !== session.areaId)
+        (requestedKitchenId &&
+          requestedKitchenId !== session.areaId &&
+          (!isElevatedAccessRole(session.role) ||
+            !isKitchenAreaId(requestedKitchenId) ||
+            !hasAreaAccess(session, requestedKitchenId)))
       ) {
         return fallbackPath;
       }
 
       return getCanonicalKitchenOrderPath(
         parsedTarget.pathname.slice("/orders/".length),
-        session.areaId,
+        requestedKitchenId && isKitchenAreaId(requestedKitchenId)
+          ? requestedKitchenId
+          : session.areaId,
       );
     },
   };
@@ -136,6 +197,49 @@ export function createAreaAccessService(
 
 function normalizePin(pin: string) {
   return pin.trim();
+}
+
+function resolveElevatedAccessRole(
+  config: AreaAccessPolicyConfig,
+  receivedPin: string,
+): Extract<AccessRole, "manager" | "admin"> | null {
+  if (!receivedPin) {
+    return null;
+  }
+
+  if (config.elevatedPins?.admin === receivedPin) {
+    return "admin";
+  }
+
+  if (config.elevatedPins?.manager === receivedPin) {
+    return "manager";
+  }
+
+  return null;
+}
+
+function buildAuthenticatedSession({
+  areaId,
+  getNow,
+  role,
+  sessionTtlMs,
+}: {
+  areaId: AreaId;
+  getNow: () => Date;
+  role: AccessRole;
+  sessionTtlMs: number;
+}) {
+  const issuedAt = getNow();
+  const expiresAt = new Date(issuedAt.getTime() + sessionTtlMs);
+
+  return {
+    allowedAreaIds: isElevatedAccessRole(role) ? [...areaIds] : [areaId],
+    areaId,
+    expiresAt: expiresAt.toISOString(),
+    issuedAt: issuedAt.toISOString(),
+    role,
+    version: AREA_SESSION_VERSION,
+  } satisfies AreaSession;
 }
 
 function parseRelativeTarget(next?: string) {

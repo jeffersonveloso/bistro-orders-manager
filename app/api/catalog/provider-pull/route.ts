@@ -1,12 +1,14 @@
 import {
+  forbiddenAreaResponse,
   type AreaAccessRouteDependencies,
-  withKitchenArea,
+  withAreaSession,
 } from "@/app/api/_lib/area-access-route";
 import type { CatalogAdminProviderPort } from "@/src/application/ports";
 import {
   previewProviderCatalogPull,
   type CatalogMappingRepository,
 } from "@/src/application/catalog-mapping-service";
+import { isElevatedAccessRole, isKitchenArea } from "@/src/domain/area-access";
 import { createConfiguredCatalogAdminProvider } from "@/src/infrastructure/order-provider-factory";
 import { getProductionRepository } from "@/src/infrastructure/sqlite";
 import {
@@ -77,9 +79,16 @@ export async function handlePostProviderCatalogPullRoute(
   request: Request,
   dependencies: ProviderCatalogPullRouteDependencies = {},
 ) {
-  return withKitchenArea(
+  return withAreaSession(
     request,
-    async () => {
+    async ({ session }) => {
+      if (
+        !isKitchenArea(session.areaId) &&
+        !isElevatedAccessRole(session.role)
+      ) {
+        return forbiddenAreaResponse();
+      }
+
       return handlePostProviderCatalogPull(request, dependencies);
     },
     dependencies,

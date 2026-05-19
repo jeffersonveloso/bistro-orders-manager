@@ -172,6 +172,10 @@ function migrate(db: SqliteDatabase) {
       external_id TEXT NOT NULL UNIQUE,
       reference TEXT NOT NULL,
       customer_name TEXT,
+      local_canceled_at TEXT,
+      local_canceled_by_area_id TEXT,
+      local_canceled_by_role TEXT,
+      local_cancellation_reason TEXT,
       waiter_name TEXT,
       source TEXT NOT NULL,
       created_at TEXT NOT NULL,
@@ -387,7 +391,47 @@ function ensureOrderMetadataColumns(db: SqliteDatabase) {
   const columns = db
     .prepare("PRAGMA table_info(orders)")
     .all() as Array<{ name: string }>;
+  const hasLocalCanceledAt = columns.some(
+    (column) => column.name === "local_canceled_at",
+  );
+  const hasLocalCanceledByAreaId = columns.some(
+    (column) => column.name === "local_canceled_by_area_id",
+  );
+  const hasLocalCanceledByRole = columns.some(
+    (column) => column.name === "local_canceled_by_role",
+  );
+  const hasLocalCancellationReason = columns.some(
+    (column) => column.name === "local_cancellation_reason",
+  );
   const hasWaiterName = columns.some((column) => column.name === "waiter_name");
+
+  if (!hasLocalCanceledAt) {
+    db.exec(`
+      ALTER TABLE orders
+      ADD COLUMN local_canceled_at TEXT
+    `);
+  }
+
+  if (!hasLocalCanceledByAreaId) {
+    db.exec(`
+      ALTER TABLE orders
+      ADD COLUMN local_canceled_by_area_id TEXT
+    `);
+  }
+
+  if (!hasLocalCanceledByRole) {
+    db.exec(`
+      ALTER TABLE orders
+      ADD COLUMN local_canceled_by_role TEXT
+    `);
+  }
+
+  if (!hasLocalCancellationReason) {
+    db.exec(`
+      ALTER TABLE orders
+      ADD COLUMN local_cancellation_reason TEXT
+    `);
+  }
 
   if (!hasWaiterName) {
     db.exec(`
@@ -638,6 +682,10 @@ function loadAggregateRows(db: SqliteDatabase) {
           external_id as externalId,
           reference,
           customer_name as customerName,
+          local_canceled_at as localCanceledAt,
+          local_canceled_by_area_id as localCanceledByAreaId,
+          local_canceled_by_role as localCanceledByRole,
+          local_cancellation_reason as localCancellationReason,
           waiter_name as waiterName,
           source,
           created_at as createdAt,
@@ -922,6 +970,10 @@ function createProductionRepository(db: SqliteDatabase): SqliteProductionReposit
       external_id,
       reference,
       customer_name,
+      local_canceled_at,
+      local_canceled_by_area_id,
+      local_canceled_by_role,
+      local_cancellation_reason,
       waiter_name,
       source,
       created_at,
@@ -932,6 +984,10 @@ function createProductionRepository(db: SqliteDatabase): SqliteProductionReposit
       @externalId,
       @reference,
       @customerName,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
       @waiterName,
       @source,
       @createdAt,
@@ -1510,6 +1566,37 @@ function createProductionRepository(db: SqliteDatabase): SqliteProductionReposit
     },
     getOrderAggregate(orderId: string) {
       return this.listOrderAggregates().find((aggregate) => aggregate.order.id === orderId);
+    },
+    cancelOrderLocally(orderId, input) {
+      const timestamp = new Date().toISOString();
+      const normalizedReason = input.reason.trim();
+      const result = db
+        .prepare(
+          `
+            UPDATE orders
+            SET
+              local_canceled_at = ?,
+              local_canceled_by_area_id = ?,
+              local_canceled_by_role = ?,
+              local_cancellation_reason = ?,
+              updated_at = ?
+            WHERE id = ?
+          `,
+        )
+        .run(
+          timestamp,
+          input.canceledByAreaId,
+          input.canceledByRole,
+          normalizedReason,
+          timestamp,
+          orderId,
+        );
+
+      if (result.changes === 0) {
+        throw new Error(`Order "${orderId}" not found`);
+      }
+
+      return this.getOrderAggregate(orderId)!;
     },
     updateItemStatus(orderId, itemId, status) {
       const timestamp = new Date().toISOString();

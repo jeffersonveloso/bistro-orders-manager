@@ -2,7 +2,10 @@ import crypto from "node:crypto";
 import type { AreaAccessPolicyConfig } from "@/src/application/area-access-service";
 import {
   AREA_SESSION_VERSION,
+  areaIds,
+  isAccessRole,
   isAreaId,
+  isElevatedAccessRole,
   type AreaSession,
 } from "@/src/domain/area-access";
 
@@ -64,6 +67,8 @@ export function loadAreaAccessRuntimeConfig(
   const kitchen1Pin = readRequiredEnv(env, "BISTRO_ACCESS_PIN_KITCHEN_1");
   const kitchen2Pin = readRequiredEnv(env, "BISTRO_ACCESS_PIN_KITCHEN_2");
   const salonPin = readRequiredEnv(env, "BISTRO_ACCESS_PIN_SALON");
+  const managerPin = readOptionalEnv(env, "BISTRO_ACCESS_PIN_MANAGER");
+  const adminPin = readOptionalEnv(env, "BISTRO_ACCESS_PIN_ADMIN");
   const sessionTtlHours = readSessionTtlHours(
     env.BISTRO_ACCESS_SESSION_TTL_HOURS,
   );
@@ -72,6 +77,10 @@ export function loadAreaAccessRuntimeConfig(
 
   return {
     cookieName: areaAccessCookieName,
+    elevatedPins: {
+      admin: adminPin,
+      manager: managerPin,
+    },
     pins: {
       "kitchen-1": kitchen1Pin,
       "kitchen-2": kitchen2Pin,
@@ -282,9 +291,11 @@ export function renewAreaSession(
   now: Date = new Date(),
 ): AreaSession {
   return {
+    allowedAreaIds: [...session.allowedAreaIds],
     areaId: session.areaId,
     expiresAt: new Date(now.getTime() + config.sessionTtlMs).toISOString(),
     issuedAt: now.toISOString(),
+    role: session.role,
     version: AREA_SESSION_VERSION,
   };
 }
@@ -319,6 +330,12 @@ function readRequiredEnv(env: NodeJS.ProcessEnv, key: string) {
   }
 
   return value;
+}
+
+function readOptionalEnv(env: NodeJS.ProcessEnv, key: string) {
+  const value = env[key]?.trim();
+
+  return value && value.length > 0 ? value : undefined;
 }
 
 function readSessionTtlHours(value: string | undefined) {
@@ -375,17 +392,33 @@ function parseAreaSession(value: unknown):
   const areaId = value.areaId;
   const issuedAt = value.issuedAt;
   const expiresAt = value.expiresAt;
+  const roleValue = value.role;
+  const allowedAreaIdsValue = value.allowedAreaIds;
   const version = value.version;
 
   if (version !== AREA_SESSION_VERSION) {
     return { ok: false, reason: "unsupported_version" };
   }
 
+  const role =
+    typeof roleValue === "undefined"
+      ? "station"
+      : typeof roleValue === "string" && isAccessRole(roleValue)
+        ? roleValue
+        : null;
+  const allowedAreaIds = normalizeSessionAllowedAreaIds(
+    role,
+    areaId,
+    allowedAreaIdsValue,
+  );
+
   if (
     typeof areaId !== "string" ||
     !isAreaId(areaId) ||
     typeof issuedAt !== "string" ||
     typeof expiresAt !== "string" ||
+    !role ||
+    !allowedAreaIds ||
     Number.isNaN(Date.parse(issuedAt)) ||
     Number.isNaN(Date.parse(expiresAt)) ||
     Date.parse(issuedAt) > Date.parse(expiresAt)
@@ -396,12 +429,54 @@ function parseAreaSession(value: unknown):
   return {
     ok: true,
     session: {
+      allowedAreaIds,
       areaId,
       expiresAt,
       issuedAt,
+      role,
       version,
     },
   };
+}
+
+function normalizeSessionAllowedAreaIds(
+  role: AreaSession["role"] | null,
+  areaId: unknown,
+  value: unknown,
+) {
+  if (typeof areaId !== "string" || !isAreaId(areaId) || !role) {
+    return null;
+  }
+
+  if (typeof value === "undefined") {
+    return isElevatedAccessRole(role) ? [...areaIds] : [areaId];
+  }
+
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const allowedAreaIds: AreaSession["allowedAreaIds"] = [];
+
+  for (const candidate of value) {
+    if (typeof candidate !== "string" || !isAreaId(candidate)) {
+      return null;
+    }
+
+    if (!allowedAreaIds.includes(candidate)) {
+      allowedAreaIds.push(candidate);
+    }
+  }
+
+  if (!allowedAreaIds.includes(areaId)) {
+    return null;
+  }
+
+  if (!isElevatedAccessRole(role) && allowedAreaIds.some((candidate) => candidate !== areaId)) {
+    return null;
+  }
+
+  return allowedAreaIds;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

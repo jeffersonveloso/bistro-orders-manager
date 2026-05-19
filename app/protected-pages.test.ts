@@ -310,27 +310,25 @@ describe("protected server pages", () => {
     expect(Array.isArray(page.props.initialData.summary)).toBe(true);
   });
 
-  it("canonicalizes /orders/[orderId] to the authenticated kitchen before refresh runs", async () => {
+  it("defaults /orders/[orderId] to the authenticated kitchen without redirecting", async () => {
     const config = createRuntimeConfig();
     const refresh = vi.fn(async () => {});
 
-    await expect(
-      loadOrderPage(
-        {
-          params: Promise.resolve({ orderId: "order_anota-101" }),
-          searchParams: Promise.resolve({}),
-        },
-        {
-          config,
-          cookieStore: createCookieStore(config, "kitchen-1"),
-          now: new Date("2026-05-13T12:00:00.000Z"),
-          refresh,
-        },
-      ),
-    ).rejects.toThrow(
-      "NEXT_REDIRECT:/orders/order_anota-101?kitchen=kitchen-1",
+    const result = await loadOrderPage(
+      {
+        params: Promise.resolve({ orderId: "order_anota-101" }),
+        searchParams: Promise.resolve({}),
+      },
+      {
+        config,
+        cookieStore: createCookieStore(config, "kitchen-1"),
+        now: new Date("2026-05-13T12:00:00.000Z"),
+        refresh,
+      },
     );
-    expect(refresh).not.toHaveBeenCalled();
+
+    expect(result.focusKitchenId).toBe("kitchen-1");
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 
   it("redirects a kitchen away from an order detail it does not own before refresh runs", async () => {

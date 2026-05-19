@@ -25,9 +25,11 @@ describe("area access service", () => {
     const session = createService().authenticate("kitchen-1", "1111");
 
     expect(session).toEqual({
+      allowedAreaIds: ["kitchen-1"],
       areaId: "kitchen-1",
       expiresAt: "2026-05-14T00:00:00.000Z",
       issuedAt: "2026-05-13T08:00:00.000Z",
+      role: "station",
       version: 1,
     });
   });
@@ -88,7 +90,7 @@ describe("area access service", () => {
         "/orders/order-101?kitchen=kitchen-2",
       ),
     ).toBe("/");
-    expect(service.resolveNextTarget(kitchenSession, "/catalog")).toBe("/");
+    expect(service.resolveNextTarget(kitchenSession, "/catalog")).toBe("/catalog");
     expect(service.resolveNextTarget(kitchenSession, "https://evil.test")).toBe(
       "/",
     );
@@ -96,5 +98,36 @@ describe("area access service", () => {
     expect(service.resolveNextTarget(salonSession, "/orders/order-101")).toBe(
       "/salon",
     );
+  });
+
+  it("authenticates elevated pins with cross-area reach while preserving the selected starting area", () => {
+    const service = createAreaAccessService(
+      {
+        elevatedPins: {
+          manager: "4444",
+        },
+        pins: {
+          "kitchen-1": "1111",
+          "kitchen-2": "2222",
+          salon: "3333",
+        },
+        sessionTtlMs: 16 * 60 * 60 * 1000,
+      },
+      () => new Date("2026-05-13T08:00:00.000Z"),
+    );
+
+    const managerSession = service.authenticate("kitchen-1", "4444");
+
+    expect(managerSession.role).toBe("manager");
+    expect(managerSession.allowedAreaIds).toEqual([
+      "kitchen-1",
+      "kitchen-2",
+      "salon",
+    ]);
+    expect(service.requireElevatedAccess(managerSession)).toBe("manager");
+    expect(service.resolveFocusKitchen(managerSession, "kitchen-2")).toBe(
+      "kitchen-2",
+    );
+    expect(service.resolveNextTarget(managerSession, "/salon")).toBe("/salon");
   });
 });

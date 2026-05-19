@@ -80,7 +80,7 @@ describe("POST /api/access/session", () => {
     expect(response.headers.get("Set-Cookie")).toBeNull();
   });
 
-  it("falls back to the canonical area home when next is disallowed", async () => {
+  it("keeps kitchen sessions on the catalog route when next is allowed", async () => {
     const config = createRuntimeConfig();
 
     const response = await handlePostAccessSession(
@@ -101,7 +101,7 @@ describe("POST /api/access/session", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       areaId: "kitchen-1",
-      redirectTo: "/",
+      redirectTo: "/catalog",
     });
     expect(response.headers.get("Set-Cookie")).toContain(
       "bistro_area_session=v1.",

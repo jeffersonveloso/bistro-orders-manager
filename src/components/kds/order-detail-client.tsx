@@ -22,10 +22,16 @@ import type {
 } from "@/src/application/production-service";
 import { AreaSwitchButton } from "@/src/components/kds/area-switch-button";
 import {
-  getDashboardInvalidationKeys,
+  boardQueryKey,
   getOrderDetailQueryOptions,
   getProtectedSurfaceFeedback,
+  orderQueryRootKey,
+  salonQueryKey,
 } from "@/src/components/kds/production-client-contracts";
+import {
+  LocalCancelOrderDialog,
+  normalizeLocalCancelReason,
+} from "@/src/components/kds/local-cancel-order-dialog";
 import {
   ProtectedSurfaceBanner,
   ProtectedSurfaceFallback,
@@ -121,18 +127,28 @@ function isReadyStatusRevertTarget(
 }
 
 export function OrderDetailClient({
+  canForceLocalCancel = false,
+  focusKitchenId,
   orderId,
   kitchenId,
   initialData,
+  managedKitchenIds,
   returnTo,
 }: {
+  canForceLocalCancel?: boolean;
+  focusKitchenId?: KitchenAreaId;
   orderId: string;
   kitchenId: KitchenAreaId;
   initialData?: OrderDetailData;
+  managedKitchenIds?: readonly KitchenAreaId[];
   returnTo?: string;
 }) {
   const queryClient = useQueryClient();
+  const resolvedFocusKitchenId = focusKitchenId ?? kitchenId;
+  const resolvedManagedKitchenIds = managedKitchenIds ?? [resolvedFocusKitchenId];
   const [showOtherKitchen, setShowOtherKitchen] = useState(true);
+  const [localCancelReason, setLocalCancelReason] = useState("");
+  const [showLocalCancelDialog, setShowLocalCancelDialog] = useState(false);
   const [pendingReadyRevert, setPendingReadyRevert] = useState<{
     itemId: string;
     itemName: string;
@@ -142,7 +158,7 @@ export function OrderDetailClient({
   const orderQuery = useQuery(
     getOrderDetailQueryOptions({
       initialData,
-      kitchenId,
+      kitchenId: resolvedFocusKitchenId,
       orderId,
     }),
   );
@@ -160,17 +176,14 @@ export function OrderDetailClient({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action }),
       }),
-    onSuccess: async (_, variables) => {
-      const invalidationKeys = getDashboardInvalidationKeys(
-        orderId,
-        variables.currentKitchenId,
-      );
-
-      await Promise.all(
-        invalidationKeys.map((queryKey) =>
-          queryClient.invalidateQueries({ queryKey }),
-        ),
-      );
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: boardQueryKey }),
+        queryClient.invalidateQueries({
+          queryKey: [...orderQueryRootKey, orderId],
+        }),
+        queryClient.invalidateQueries({ queryKey: salonQueryKey }),
+      ]);
     },
   });
 
@@ -189,19 +202,39 @@ export function OrderDetailClient({
       }),
     onSuccess: async () => {
       setPendingReadyRevert(null);
-      const invalidationKeys = getDashboardInvalidationKeys(orderId, kitchenId);
-
-      await Promise.all(
-        invalidationKeys.map((queryKey) =>
-          queryClient.invalidateQueries({ queryKey }),
-        ),
-      );
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: boardQueryKey }),
+        queryClient.invalidateQueries({
+          queryKey: [...orderQueryRootKey, orderId],
+        }),
+        queryClient.invalidateQueries({ queryKey: salonQueryKey }),
+      ]);
+    },
+  });
+  const localCancelMutation = useMutation({
+    mutationFn: async (reason: string) =>
+      fetchJson(`/api/orders/${orderId}/local-cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason }),
+      }),
+    onSuccess: async () => {
+      setLocalCancelReason("");
+      setShowLocalCancelDialog(false);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: boardQueryKey }),
+        queryClient.invalidateQueries({
+          queryKey: [...orderQueryRootKey, orderId],
+        }),
+        queryClient.invalidateQueries({ queryKey: salonQueryKey }),
+      ]);
     },
   });
   const blockingAuthFeedback = getProtectedSurfaceFeedback(orderQuery.error);
   const actionAuthFeedback =
     getProtectedSurfaceFeedback(ticketMutation.error) ??
-    getProtectedSurfaceFeedback(itemMutation.error);
+    getProtectedSurfaceFeedback(itemMutation.error) ??
+    getProtectedSurfaceFeedback(localCancelMutation.error);
 
   const data = orderQuery.data;
   const confirmReadyRevert = () => {
@@ -235,6 +268,15 @@ export function OrderDetailClient({
       status: nextStatus,
     });
   };
+  const confirmLocalCancel = () => {
+    const normalizedReason = normalizeLocalCancelReason(localCancelReason);
+
+    if (!normalizedReason) {
+      return;
+    }
+
+    localCancelMutation.mutate(normalizedReason);
+  };
 
   if (orderQuery.isLoading) {
     return (
@@ -264,6 +306,9 @@ export function OrderDetailClient({
   const focusActiveItems = data.focusItems.filter(
     (item) => item.externalStatus?.kind !== "canceled",
   );
+  const canSwitchToOtherKitchen =
+    Boolean(data.otherKitchen) &&
+    resolvedManagedKitchenIds.includes(data.otherKitchen!.id);
   const focusTicketState = {
     isCanceled: isCanceledTicketStatus(data.focusTicketStatus),
     allReady:
@@ -275,6 +320,17 @@ export function OrderDetailClient({
   };
   const showOverallOrderStatus =
     data.orderStatusKey !== data.focusTicketStatus || Boolean(data.otherKitchen);
+  const otherKitchenOrderHref = data.otherKitchen
+    ? (() => {
+        const searchParams = new URLSearchParams({ kitchen: data.otherKitchen.id });
+
+        if (returnTo) {
+          searchParams.set("returnTo", returnTo);
+        }
+
+        return `/orders/${orderId}?${searchParams.toString()}`;
+      })()
+    : null;
 
   return (
     <main className="min-h-screen px-4 py-4 md:px-6 md:py-6">
@@ -340,6 +396,19 @@ export function OrderDetailClient({
               </h2>
             </div>
             <div className="flex flex-wrap items-start justify-end gap-2">
+              {canForceLocalCancel &&
+              !data.localCancellation &&
+              data.orderStatusKey !== "canceled" ? (
+                <Button
+                  data-testid="order-local-cancel-action"
+                  onClick={() => setShowLocalCancelDialog(true)}
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                >
+                  Retirar do fluxo
+                </Button>
+              ) : null}
               {!focusTicketState.isCanceled && !focusTicketState.hasStarted && (
                 <Button
                   data-testid={`start-kitchen-${data.focusKitchenId}`}
@@ -382,6 +451,42 @@ export function OrderDetailClient({
 
         {actionAuthFeedback ? (
           <ProtectedSurfaceBanner feedback={actionAuthFeedback} />
+        ) : null}
+
+        {data.localCancellation ? (
+          <Card
+            className="border-[color-mix(in_oklab,var(--accent-hot)_48%,white)] bg-[linear-gradient(135deg,color-mix(in_oklab,var(--accent-hot)_12%,white),rgba(255,255,255,0.96))] p-5"
+            data-testid="local-cancel-banner"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="max-w-4xl space-y-2">
+                <div className="flex items-center gap-2 text-[var(--accent-hot)]">
+                  <TriangleAlert className="size-5" />
+                  <p className="font-display text-2xl uppercase tracking-[0.08em]">
+                    {data.localCancellation.label}
+                  </p>
+                </div>
+                <p className="text-base font-semibold text-[var(--ink-strong)]">
+                  {data.localCancellation.reason}
+                </p>
+                <p className="text-sm leading-6 text-[var(--ink-soft)]">
+                  {data.localCancellation.detail}
+                </p>
+              </div>
+
+              <div className="rounded-[1.4rem] border border-[color-mix(in_oklab,var(--accent-hot)_40%,white)] bg-white/72 px-4 py-3 text-right">
+                <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
+                  Ação manual
+                </p>
+                <p className="mt-1 text-sm font-semibold uppercase tracking-[0.16em] text-[var(--accent-hot)]">
+                  {data.localCancellation.actor}
+                </p>
+                <p className="mt-2 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--ink-muted)]">
+                  {formatSyncTime(data.localCancellation.canceledAt)}
+                </p>
+              </div>
+            </div>
+          </Card>
         ) : null}
 
         {data.syncException ? (
@@ -611,10 +716,20 @@ export function OrderDetailClient({
                 </h2>
               </div>
               {data.otherKitchen ? (
-                <StatusBadge
-                  label={data.otherKitchen.status}
-                  status={data.otherKitchen.statusKey}
-                />
+                <div className="flex flex-wrap items-center gap-2">
+                  {canSwitchToOtherKitchen && otherKitchenOrderHref ? (
+                    <Button asChild size="sm" variant="secondary">
+                      <Link href={otherKitchenOrderHref}>
+                        Operar esta cozinha
+                        <ArrowUpRight className="size-4" />
+                      </Link>
+                    </Button>
+                  ) : null}
+                  <StatusBadge
+                    label={data.otherKitchen.status}
+                    status={data.otherKitchen.statusKey}
+                  />
+                </div>
               ) : null}
             </div>
 
@@ -770,6 +885,28 @@ export function OrderDetailClient({
           </Card>
         ) : null}
       </div>
+      <LocalCancelOrderDialog
+        isOpen={showLocalCancelDialog}
+        isPending={localCancelMutation.isPending}
+        onCancel={() => {
+          if (!localCancelMutation.isPending) {
+            setShowLocalCancelDialog(false);
+            setLocalCancelReason("");
+          }
+        }}
+        onConfirm={confirmLocalCancel}
+        onReasonChange={setLocalCancelReason}
+        order={{
+          customerName: data.customerName,
+          focusKitchenName: data.focusKitchenName,
+          focusTicketStatus: data.focusTicketStatus,
+          focusTicketStatusLabel: data.focusKitchenStatus,
+          orderStatus: data.orderStatusKey,
+          orderStatusLabel: data.orderStatus,
+          reference: data.reference,
+        }}
+        reason={localCancelReason}
+      />
       <ReadyStatusRevertDialog
         isOpen={Boolean(pendingReadyRevert)}
         isPending={

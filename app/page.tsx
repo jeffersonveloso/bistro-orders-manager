@@ -2,6 +2,10 @@ import { requireKitchenPageAccess, type AreaPageDependencies } from "@/app/_lib/
 import type { ProductionRepository } from "@/src/application/ports";
 import { getDashboardData } from "@/src/application/production-service";
 import { DashboardClient } from "@/src/components/kds/dashboard-client";
+import {
+  isElevatedAccessRole,
+  kitchenAreaIds,
+} from "@/src/domain/area-access";
 import { maybeRefreshRuntimeProviderSync } from "@/src/infrastructure/runtime-provider-sync-refresh";
 import { getProductionRepository } from "@/src/infrastructure/sqlite";
 
@@ -13,22 +17,31 @@ export interface HomePageDependencies extends AreaPageDependencies {
 }
 
 export async function loadHomePage(dependencies: HomePageDependencies = {}) {
-  const { kitchenId } = await requireKitchenPageAccess(dependencies);
+  const { kitchenId, session } = await requireKitchenPageAccess(dependencies);
   await runReadRefresh(dependencies);
+  const hasElevatedAccess = isElevatedAccessRole(session.role);
 
   return {
     activeKitchenId: kitchenId,
+    canForceLocalCancel: hasElevatedAccess,
     initialData: getDashboardData(
       dependencies.repository ?? getProductionRepository(),
     ),
+    managedKitchenIds: hasElevatedAccess ? [...kitchenAreaIds] : [kitchenId],
   };
 }
 
 export default async function Home() {
-  const { activeKitchenId, initialData } = await loadHomePage();
+  const { activeKitchenId, canForceLocalCancel, initialData, managedKitchenIds } =
+    await loadHomePage();
 
   return (
-    <DashboardClient activeKitchenId={activeKitchenId} initialData={initialData} />
+    <DashboardClient
+      activeKitchenId={activeKitchenId}
+      canForceLocalCancel={canForceLocalCancel}
+      initialData={initialData}
+      managedKitchenIds={managedKitchenIds}
+    />
   );
 }
 

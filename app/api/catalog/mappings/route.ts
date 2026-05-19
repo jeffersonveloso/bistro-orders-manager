@@ -1,7 +1,3 @@
-import {
-  type AreaAccessRouteDependencies,
-  withKitchenArea,
-} from "@/app/api/_lib/area-access-route";
 import { getCatalogExternalIdSupport } from "@/src/application/catalog-provider-assistance-service";
 import type { ProviderSyncService } from "@/src/application/ports";
 import type { CatalogAdminProviderPort } from "@/src/application/ports";
@@ -17,6 +13,12 @@ import {
   jsonNoStore,
   readJsonObject,
 } from "@/app/api/_lib/provider-sync-route";
+import {
+  forbiddenAreaResponse,
+  type AreaAccessRouteDependencies,
+  withAreaSession,
+} from "@/app/api/_lib/area-access-route";
+import { isElevatedAccessRole, isKitchenArea } from "@/src/domain/area-access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -97,9 +99,16 @@ export async function handleGetCatalogMappingsRoute(
   request: Request,
   dependencies: CatalogMappingsRouteDependencies = {},
 ) {
-  return withKitchenArea(
+  return withAreaSession(
     request,
-    async () => {
+    async ({ session }) => {
+      if (
+        !isKitchenArea(session.areaId) &&
+        !isElevatedAccessRole(session.role)
+      ) {
+        return forbiddenAreaResponse();
+      }
+
       return handleGetCatalogMappings(dependencies);
     },
     dependencies,
@@ -110,9 +119,16 @@ export async function handlePostCatalogMappingRoute(
   request: Request,
   dependencies: CatalogMappingsRouteDependencies = {},
 ) {
-  return withKitchenArea(
+  return withAreaSession(
     request,
-    async () => {
+    async ({ session }) => {
+      if (
+        !isKitchenArea(session.areaId) &&
+        !isElevatedAccessRole(session.role)
+      ) {
+        return forbiddenAreaResponse();
+      }
+
       return handlePostCatalogMapping(request, dependencies);
     },
     dependencies,

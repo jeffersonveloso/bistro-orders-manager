@@ -8,6 +8,7 @@ import type {
   OrderDetailData,
   SalonData,
 } from "@/src/application/production-service";
+import type { AreaSession } from "@/src/domain/area-access";
 import type { AreaAccessRuntimeConfig } from "@/src/infrastructure/area-session";
 import { signAreaSession } from "@/src/infrastructure/area-session";
 import { createProductionTestContext } from "@/src/infrastructure/sqlite";
@@ -15,6 +16,7 @@ import { createProductionTestContext } from "@/src/infrastructure/sqlite";
 function createRuntimeConfig(): AreaAccessRuntimeConfig {
   return {
     cookieName: "bistro_area_session",
+    elevatedPins: {},
     pins: {
       "kitchen-1": "1111",
       "kitchen-2": "2222",
@@ -33,13 +35,17 @@ function createRuntimeConfig(): AreaAccessRuntimeConfig {
 function createCookieHeader(
   config: AreaAccessRuntimeConfig,
   areaId: "kitchen-1" | "kitchen-2" | "salon",
+  overrides: Partial<AreaSession> = {},
 ) {
   return `${config.cookieName}=${signAreaSession(
     {
+      allowedAreaIds: [areaId],
       areaId,
       expiresAt: "2099-12-31T23:59:59.000Z",
       issuedAt: "2026-05-13T00:00:00.000Z",
+      role: "station",
       version: 1,
+      ...overrides,
     },
     config,
   )}`;
@@ -161,6 +167,39 @@ describe("protected production read routes", () => {
     }
   });
 
+  it("allows an elevated kitchen session to read the other kitchen focus", async () => {
+    const context = createProductionTestContext({
+      applyDemoScenarios: true,
+      importProviderOrders: true,
+    });
+    const config = createRuntimeConfig();
+
+    try {
+      const response = await handleGetOrderDetail(
+        createRequest(
+          "/api/orders/order_anota-102?kitchen=kitchen-2",
+          createCookieHeader(config, "kitchen-1", {
+            allowedAreaIds: ["kitchen-1", "kitchen-2", "salon"],
+            role: "manager",
+          }),
+        ),
+        { orderId: "order_anota-102" },
+        {
+          config,
+          now: new Date("2026-05-13T12:00:00.000Z"),
+          refresh: vi.fn(async () => {}),
+          repository: context.repository,
+        },
+      );
+      const body = (await response.json()) as OrderDetailData;
+
+      expect(response.status).toBe(200);
+      expect(body.focusKitchenId).toBe("kitchen-2");
+    } finally {
+      context.close();
+    }
+  });
+
   it("returns 403 for GET /api/board from a salão session", async () => {
     const context = createProductionTestContext({
       importProviderOrders: true,
@@ -182,6 +221,41 @@ describe("protected production read routes", () => {
       expect(response.status).toBe(403);
       expect(await response.json()).toBe("Forbidden");
       expect(refresh).not.toHaveBeenCalled();
+    } finally {
+      context.close();
+    }
+  });
+
+  it("allows an elevated kitchen session to read the salão surface", async () => {
+    const context = createProductionTestContext({
+      applyDemoScenarios: true,
+      importProviderOrders: true,
+    });
+    const config = createRuntimeConfig();
+
+    try {
+      const response = await handleGetSalon(
+        createRequest(
+          "/api/salon",
+          createCookieHeader(config, "kitchen-1", {
+            allowedAreaIds: ["kitchen-1", "kitchen-2", "salon"],
+            role: "manager",
+          }),
+        ),
+        {
+          config,
+          now: new Date("2026-05-13T12:00:00.000Z"),
+          refresh: vi.fn(async () => {}),
+          repository: context.repository,
+        },
+      );
+
+      expect(response.status).toBe(200);
+      expect((await response.json()) as SalonData).toEqual(
+        expect.objectContaining({
+          summary: expect.any(Array),
+        }),
+      );
     } finally {
       context.close();
     }

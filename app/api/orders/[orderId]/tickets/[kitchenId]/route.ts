@@ -12,6 +12,10 @@ import {
   completeTicketProduction,
   startTicketProduction,
 } from "@/src/application/production-service";
+import {
+  hasAreaAccess,
+  isElevatedAccessRole,
+} from "@/src/domain/area-access";
 import { isKitchenId } from "@/src/domain/production";
 import { getProductionRepository } from "@/src/infrastructure/sqlite";
 
@@ -76,8 +80,13 @@ export async function handlePatchKitchenTicketRoute(
 ) {
   return withKitchenArea(
     request,
-    async ({ kitchenId: sessionKitchenId }) => {
-      if (isKitchenId(kitchenId) && kitchenId !== sessionKitchenId) {
+    async ({ kitchenId: sessionKitchenId, session }) => {
+      if (
+        isKitchenId(kitchenId) &&
+        kitchenId !== sessionKitchenId &&
+        (!isElevatedAccessRole(session.role) ||
+          !hasAreaAccess(session, kitchenId))
+      ) {
         return forbiddenAreaResponse();
       }
 

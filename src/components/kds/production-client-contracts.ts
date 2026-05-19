@@ -16,10 +16,10 @@ export const orderQueryRootKey = ["order"] as const;
 export const salonQueryKey = ["salon"] as const;
 
 export function canManageKitchen(
-  activeKitchenId: KitchenAreaId,
+  managedKitchenIds: readonly KitchenAreaId[],
   kitchenId: KitchenAreaId,
 ) {
-  return activeKitchenId === kitchenId;
+  return managedKitchenIds.includes(kitchenId);
 }
 
 export function getBoardQueryOptions(initialData?: DashboardData) {
@@ -86,23 +86,19 @@ export function getSalonQueryOptions(initialData?: SalonData) {
 
 export function hasAuthorizedOrderAccess(
   board: DashboardData,
-  activeKitchenId: KitchenAreaId,
+  managedKitchenIds: readonly KitchenAreaId[],
   orderId: string | null,
 ) {
   if (!orderId) {
     return false;
   }
 
-  const activeKitchen = board.kitchens.find(
-    (kitchen) => kitchen.id === activeKitchenId,
-  );
-
-  if (!activeKitchen) {
-    return false;
-  }
-
-  return activeKitchen.columns.some((column) =>
-    column.tickets.some((ticket) => ticket.orderId === orderId),
+  return board.kitchens.some(
+    (kitchen) =>
+      managedKitchenIds.includes(kitchen.id) &&
+      kitchen.columns.some((column) =>
+        column.tickets.some((ticket) => ticket.orderId === orderId),
+      ),
   );
 }
 

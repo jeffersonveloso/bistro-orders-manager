@@ -1,3 +1,5 @@
+import type { AccessRole, AreaId } from "@/src/domain/area-access";
+
 export const kitchens = [
   { id: "kitchen-1", name: "Kitchen 1", description: "Drinks & Cold Line" },
   { id: "kitchen-2", name: "Kitchen 2", description: "Bakery & Hot Line" },
@@ -80,6 +82,10 @@ export interface OrderRecord {
   externalId: string;
   reference: string;
   customerName: string | null;
+  localCanceledAt: string | null;
+  localCanceledByAreaId: AreaId | null;
+  localCanceledByRole: AccessRole | null;
+  localCancellationReason: string | null;
   waiterName: string | null;
   source: string;
   createdAt: string;
@@ -113,6 +119,12 @@ export interface OrderAggregate {
   order: OrderRecord;
   items: OrderItemRecord[];
   tickets: KitchenTicketRecord[];
+}
+
+export function isLocallyCanceledOrder(
+  order: Pick<OrderRecord, "localCanceledAt">,
+) {
+  return typeof order.localCanceledAt === "string" && order.localCanceledAt.length > 0;
 }
 
 export function isKitchenId(value: string): value is KitchenId {

@@ -9,6 +9,10 @@ import {
 } from "@/app/api/_lib/provider-sync-route";
 import type { ProductionRepository } from "@/src/application/ports";
 import { setOrderItemStatus } from "@/src/application/production-service";
+import {
+  hasAreaAccess,
+  isElevatedAccessRole,
+} from "@/src/domain/area-access";
 import { itemStatuses } from "@/src/domain/production";
 import { getProductionRepository } from "@/src/infrastructure/sqlite";
 
@@ -84,7 +88,7 @@ export async function handlePatchOrderItemRoute(
 ) {
   return withKitchenArea(
     request,
-    async ({ kitchenId }) => {
+    async ({ kitchenId, session }) => {
       const repository = dependencies.repository ?? getProductionRepository();
       const aggregate = repository.getOrderAggregate(orderId);
 
@@ -98,7 +102,12 @@ export async function handlePatchOrderItemRoute(
         return jsonNoStore("Order item not found", { status: 404 });
       }
 
-      if (item.kitchenId !== kitchenId) {
+      const canManageRequestedKitchen =
+        item.kitchenId === kitchenId ||
+        (isElevatedAccessRole(session.role) &&
+          hasAreaAccess(session, item.kitchenId));
+
+      if (!canManageRequestedKitchen) {
         return forbiddenAreaResponse();
       }
 

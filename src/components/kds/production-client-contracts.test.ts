@@ -10,6 +10,10 @@ import {
   getSalonData,
 } from "@/src/application/production-service";
 import { DashboardClient } from "@/src/components/kds/dashboard-client";
+import {
+  LocalCancelOrderDialog,
+  normalizeLocalCancelReason,
+} from "@/src/components/kds/local-cancel-order-dialog";
 import { OrderDetailClient } from "@/src/components/kds/order-detail-client";
 import {
   getDashboardInvalidationKeys,
@@ -336,6 +340,74 @@ describe("production client contracts", () => {
     expect(markup).toContain("Em preparo");
     expect(markup).toContain('data-testid="ready-status-revert-confirm"');
     expect(markup).toContain('data-testid="ready-status-revert-cancel"');
+  });
+
+  it("renders the manager local-cancel controls on dashboard and order detail surfaces", () => {
+    const context = createProductionTestContext({
+      applyDemoScenarios: true,
+      importProviderOrders: true,
+    });
+
+    try {
+      const orderDetailData = getOrderDetailData(
+        context.repository,
+        "order_anota-101",
+        "kitchen-1",
+      );
+
+      if (!orderDetailData) {
+        throw new Error("Expected order detail data for manager regression");
+      }
+
+      const dashboardMarkup = renderClient(
+        createElement(DashboardClient, {
+          activeKitchenId: "kitchen-1",
+          canForceLocalCancel: true,
+          initialData: getDashboardData(context.repository),
+          managedKitchenIds: ["kitchen-1", "kitchen-2"],
+        }),
+      );
+      const orderDetailMarkup = renderClient(
+        createElement(OrderDetailClient, {
+          canForceLocalCancel: true,
+          focusKitchenId: "kitchen-1",
+          initialData: orderDetailData,
+          kitchenId: "kitchen-1",
+          managedKitchenIds: ["kitchen-1", "kitchen-2"],
+          orderId: "order_anota-101",
+        }),
+      );
+      const dialogMarkup = renderClient(
+        createElement(LocalCancelOrderDialog, {
+          isOpen: true,
+          onCancel: () => undefined,
+          onConfirm: () => undefined,
+          onReasonChange: () => undefined,
+          order: {
+            customerName: "Mesa 4",
+            focusKitchenName: "Kitchen 1",
+            focusTicketStatus: "in_preparation",
+            focusTicketStatusLabel: "Em preparo",
+            orderStatus: "in_progress",
+            orderStatusLabel: "Em andamento",
+            reference: "Pedido 101",
+          },
+          reason: "Cliente cancelou no balcão.",
+        }),
+      );
+
+      expect(dashboardMarkup).toContain("Retirar do fluxo");
+      expect(orderDetailMarkup).toContain('data-testid="order-local-cancel-action"');
+      expect(orderDetailMarkup).toContain("Operar esta cozinha");
+      expect(dialogMarkup).toContain('data-testid="local-cancel-order-dialog"');
+      expect(dialogMarkup).toContain("Motivo obrigatório");
+      expect(normalizeLocalCancelReason("  ")).toBeNull();
+      expect(normalizeLocalCancelReason(" cancelado manualmente ")).toBe(
+        "cancelado manualmente",
+      );
+    } finally {
+      context.close();
+    }
   });
 
   it("renders reversible item actions on the order-detail surface for correction flows", () => {

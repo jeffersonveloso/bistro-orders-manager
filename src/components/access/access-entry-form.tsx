@@ -79,7 +79,9 @@ export function AccessEntryForm({
                 </h1>
                 <p className="max-w-2xl text-base leading-7 text-[var(--ink-soft)] md:text-lg">
                   Cada estacao entra com o proprio PIN e acompanha apenas a
-                  superficie liberada para cozinha ou salao.
+                  superficie liberada para cozinha ou salao. PINs de gerencia
+                  ou administracao liberam as acoes sensiveis e as demais
+                  areas do sistema.
                 </p>
                 <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-[var(--ink-muted)]">
                   A selecao e o acesso funcionam direto no navegador, mesmo sem
@@ -206,7 +208,7 @@ export function AccessEntryForm({
                   className="font-mono text-xs uppercase tracking-[0.28em] text-[var(--ink-muted)]"
                   htmlFor="access-pin"
                 >
-                  PIN da area
+                  PIN da area ou perfil elevado
                 </label>
                 <input
                   autoComplete="current-password"

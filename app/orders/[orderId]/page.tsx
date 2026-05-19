@@ -1,12 +1,15 @@
 import { notFound, redirect } from "next/navigation";
 
 import { requireKitchenPageAccess, type AreaPageDependencies } from "@/app/_lib/area-access-page";
+import { AreaAuthorizationError } from "@/src/application/area-access-service";
 import type { ProductionRepository } from "@/src/application/ports";
 import { getOrderDetailData } from "@/src/application/production-service";
 import { OrderDetailClient } from "@/src/components/kds/order-detail-client";
 import {
   getCanonicalAreaPath,
   getCanonicalKitchenOrderPath,
+  isElevatedAccessRole,
+  kitchenAreaIds,
   type KitchenAreaId,
 } from "@/src/domain/area-access";
 import { maybeRefreshRuntimeProviderSync } from "@/src/infrastructure/runtime-provider-sync-refresh";
@@ -36,13 +39,29 @@ export async function loadOrderPage(
   const resolvedSearchParams = await searchParams;
   const requestedKitchenId = readFirstSearchParam(resolvedSearchParams.kitchen);
   const requestedReturnTo = readFirstSearchParam(resolvedSearchParams.returnTo);
-  const { kitchenId } = await requireKitchenPageAccess(dependencies);
+  const { areaAccessService, kitchenId, session } = await requireKitchenPageAccess(
+    dependencies,
+  );
   const returnTo = normalizeReturnTo(requestedReturnTo, kitchenId);
+  const hasElevatedAccess = isElevatedAccessRole(session.role);
+  let focusKitchenId: KitchenAreaId;
 
-  if (requestedKitchenId !== kitchenId) {
-    redirect(
-      appendReturnToParam(getCanonicalKitchenOrderPath(orderId, kitchenId), returnTo),
+  try {
+    focusKitchenId = areaAccessService.resolveFocusKitchen(
+      session,
+      requestedKitchenId,
     );
+  } catch (error) {
+    if (error instanceof AreaAuthorizationError) {
+      redirect(
+        appendReturnToParam(
+          getCanonicalKitchenOrderPath(orderId, kitchenId),
+          returnTo,
+        ),
+      );
+    }
+
+    throw error;
   }
 
   const repository = dependencies.repository ?? getProductionRepository();
@@ -52,25 +71,28 @@ export async function loadOrderPage(
     notFound();
   }
 
-  if (!aggregate.tickets.some((ticket) => ticket.kitchenId === kitchenId)) {
+  if (!aggregate.tickets.some((ticket) => ticket.kitchenId === focusKitchenId)) {
     redirect(getCanonicalAreaPath(kitchenId));
   }
 
   await runReadRefresh(dependencies);
 
-  const initialData = getOrderDetailData(repository, orderId, kitchenId);
+  const initialData = getOrderDetailData(repository, orderId, focusKitchenId);
 
   if (!initialData) {
     notFound();
   }
 
-  if (initialData.focusKitchenId !== kitchenId) {
+  if (initialData.focusKitchenId !== focusKitchenId) {
     redirect(getCanonicalAreaPath(kitchenId));
   }
 
   return {
+    canForceLocalCancel: hasElevatedAccess,
+    focusKitchenId: initialData.focusKitchenId,
     initialData,
     kitchenId,
+    managedKitchenIds: hasElevatedAccess ? [...kitchenAreaIds] : [kitchenId],
     orderId,
     returnTo,
   };
@@ -83,17 +105,26 @@ export default async function OrderPage({
   params: Promise<{ orderId: string }>;
   searchParams: Promise<{ kitchen?: string | string[]; returnTo?: string | string[] }>;
 }) {
-  const { initialData, kitchenId, orderId, returnTo } = await loadOrderPage(
-    {
-      params,
-      searchParams,
-    },
-  );
+  const {
+    canForceLocalCancel,
+    focusKitchenId,
+    initialData,
+    kitchenId,
+    managedKitchenIds,
+    orderId,
+    returnTo,
+  } = await loadOrderPage({
+    params,
+    searchParams,
+  });
 
   return (
     <OrderDetailClient
+      canForceLocalCancel={canForceLocalCancel}
+      focusKitchenId={focusKitchenId}
       initialData={initialData}
       kitchenId={kitchenId}
+      managedKitchenIds={managedKitchenIds}
       orderId={orderId}
       returnTo={returnTo}
     />

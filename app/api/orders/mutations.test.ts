@@ -4,10 +4,12 @@ import {
   handlePatchOrderItem,
   handlePatchOrderItemRoute,
 } from "@/app/api/orders/[orderId]/items/[itemId]/route";
+import { handlePostLocalCancelOrderRoute } from "@/app/api/orders/[orderId]/local-cancel/route";
 import {
   handlePatchKitchenTicket,
   handlePatchKitchenTicketRoute,
 } from "@/app/api/orders/[orderId]/tickets/[kitchenId]/route";
+import type { AreaSession } from "@/src/domain/area-access";
 import type { AreaAccessRuntimeConfig } from "@/src/infrastructure/area-session";
 import { signAreaSession } from "@/src/infrastructure/area-session";
 import { createProductionTestContext } from "@/src/infrastructure/sqlite";
@@ -15,6 +17,7 @@ import { createProductionTestContext } from "@/src/infrastructure/sqlite";
 function createRuntimeConfig(): AreaAccessRuntimeConfig {
   return {
     cookieName: "bistro_area_session",
+    elevatedPins: {},
     pins: {
       "kitchen-1": "1111",
       "kitchen-2": "2222",
@@ -33,13 +36,17 @@ function createRuntimeConfig(): AreaAccessRuntimeConfig {
 function createCookieHeader(
   config: AreaAccessRuntimeConfig,
   areaId: "kitchen-1" | "kitchen-2" | "salon",
+  overrides: Partial<AreaSession> = {},
 ) {
   return `${config.cookieName}=${signAreaSession(
     {
+      allowedAreaIds: [areaId],
       areaId,
       expiresAt: "2099-12-31T23:59:59.000Z",
       issuedAt: "2026-05-13T00:00:00.000Z",
+      role: "station",
       version: 1,
+      ...overrides,
     },
     config,
   )}`;
@@ -52,6 +59,21 @@ function createPatchRequest(
 ) {
   return new Request(`http://localhost${path}`, {
     method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...(cookieHeader ? { cookie: cookieHeader } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+function createPostRequest(
+  path: string,
+  body: Record<string, unknown>,
+  cookieHeader?: string,
+) {
+  return new Request(`http://localhost${path}`, {
+    method: "POST",
     headers: {
       "Content-Type": "application/json",
       ...(cookieHeader ? { cookie: cookieHeader } : {}),
@@ -112,6 +134,32 @@ function readKitchenTicketRow(
     | {
         startedAt: string | null;
         updatedAt: string;
+      }
+    | undefined;
+}
+
+function readLocalCancelOrderRow(
+  context: ReturnType<typeof createProductionTestContext>,
+  orderId: string,
+) {
+  return context.database
+    .prepare(
+      `
+        SELECT
+          local_canceled_at as localCanceledAt,
+          local_canceled_by_area_id as localCanceledByAreaId,
+          local_canceled_by_role as localCanceledByRole,
+          local_cancellation_reason as localCancellationReason
+        FROM orders
+        WHERE id = ?
+      `,
+    )
+    .get(orderId) as
+    | {
+        localCanceledAt: string | null;
+        localCanceledByAreaId: string | null;
+        localCanceledByRole: string | null;
+        localCancellationReason: string | null;
       }
     | undefined;
 }
@@ -712,6 +760,144 @@ describe("protected order mutation routes", () => {
       expect(await ticketResponse.json()).toBe("Invalid JSON body");
       expect(itemResponse.status).toBe(400);
       expect(await itemResponse.json()).toBe("Invalid JSON body");
+    } finally {
+      context.close();
+    }
+  });
+
+  it("allows a manager session to operate the other kitchen ticket", async () => {
+    const context = createProductionTestContext({
+      importProviderOrders: true,
+    });
+    const config = createRuntimeConfig();
+
+    try {
+      const response = await handlePatchKitchenTicketRoute(
+        createPatchRequest(
+          "/api/orders/order_anota-101/tickets/kitchen-2",
+          {
+            action: "start",
+          },
+          createCookieHeader(config, "kitchen-1", {
+            allowedAreaIds: ["kitchen-1", "kitchen-2", "salon"],
+            role: "manager",
+          }),
+        ),
+        {
+          kitchenId: "kitchen-2",
+          orderId: "order_anota-101",
+        },
+        {
+          config,
+          now: new Date("2026-05-13T12:00:00.000Z"),
+          repository: context.repository,
+        },
+      );
+
+      expect(response.status).toBe(200);
+      expect(
+        readKitchenTicketRow(context, "order_anota-101", "kitchen-2")?.startedAt,
+      ).toEqual(expect.any(String));
+    } finally {
+      context.close();
+    }
+  });
+
+  it("allows a manager session to update an item in the other kitchen", async () => {
+    const context = createProductionTestContext({
+      importProviderOrders: true,
+    });
+    const config = createRuntimeConfig();
+    const itemId = "order_anota-101__101-3";
+
+    try {
+      const response = await handlePatchOrderItemRoute(
+        createPatchRequest(
+          `/api/orders/order_anota-101/items/${itemId}`,
+          {
+            status: "in_preparation",
+          },
+          createCookieHeader(config, "kitchen-1", {
+            allowedAreaIds: ["kitchen-1", "kitchen-2", "salon"],
+            role: "manager",
+          }),
+        ),
+        {
+          itemId,
+          orderId: "order_anota-101",
+        },
+        {
+          config,
+          now: new Date("2026-05-13T12:00:00.000Z"),
+          repository: context.repository,
+        },
+      );
+
+      expect(response.status).toBe(200);
+      expect(readOrderItemRow(context, itemId)?.status).toBe("in_preparation");
+    } finally {
+      context.close();
+    }
+  });
+
+  it("allows only elevated sessions to remove an order from the flow locally", async () => {
+    const context = createProductionTestContext({
+      importProviderOrders: true,
+    });
+    const config = createRuntimeConfig();
+
+    try {
+      const forbiddenResponse = await handlePostLocalCancelOrderRoute(
+        createPostRequest(
+          "/api/orders/order_anota-101/local-cancel",
+          {
+            reason: "Cliente cancelou no balcão.",
+          },
+          createCookieHeader(config, "kitchen-1"),
+        ),
+        {
+          orderId: "order_anota-101",
+        },
+        {
+          config,
+          now: new Date("2026-05-13T12:00:00.000Z"),
+          repository: context.repository,
+        },
+      );
+
+      expect(forbiddenResponse.status).toBe(403);
+      expect(await forbiddenResponse.json()).toBe("Forbidden");
+
+      const successResponse = await handlePostLocalCancelOrderRoute(
+        createPostRequest(
+          "/api/orders/order_anota-101/local-cancel",
+          {
+            reason: "Cliente cancelou no balcão.",
+          },
+          createCookieHeader(config, "kitchen-1", {
+            allowedAreaIds: ["kitchen-1", "kitchen-2", "salon"],
+            role: "manager",
+          }),
+        ),
+        {
+          orderId: "order_anota-101",
+        },
+        {
+          config,
+          now: new Date("2026-05-13T12:00:00.000Z"),
+          repository: context.repository,
+        },
+      );
+
+      expect(successResponse.status).toBe(200);
+      expect(readLocalCancelOrderRow(context, "order_anota-101")).toEqual(
+        expect.objectContaining({
+          localCanceledAt: expect.any(String),
+          localCanceledByAreaId: "kitchen-1",
+          localCanceledByRole: "manager",
+          localCancellationReason: "Cliente cancelou no balcão.",
+        }),
+      );
     } finally {
       context.close();
     }

@@ -1,3 +1,4 @@
+import type { AccessRole, AreaId } from "@/src/domain/area-access";
 import type {
   ItemStatus,
   Kitchen,
@@ -96,6 +97,14 @@ export interface ProductionRepository {
     orderId: string,
     itemId: string,
     status: ItemStatus,
+  ): OrderAggregate;
+  cancelOrderLocally(
+    orderId: string,
+    input: {
+      canceledByAreaId: AreaId;
+      canceledByRole: Extract<AccessRole, "manager" | "admin">;
+      reason: string;
+    },
   ): OrderAggregate;
   startKitchenTicket(orderId: string, kitchenId: KitchenId): OrderAggregate;
   completeKitchenTicket(orderId: string, kitchenId: KitchenId): OrderAggregate;

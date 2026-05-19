@@ -49,15 +49,21 @@ import {
 } from "@/src/components/kds/kitchen-bell";
 import {
   canManageKitchen,
+  boardQueryKey,
   getBoardQueryOptions,
-  getDashboardInvalidationKeys,
   getProtectedSurfaceFeedback,
   hasAuthorizedOrderAccess,
+  orderQueryRootKey,
   prioritizeKitchens,
+  salonQueryKey,
 } from "@/src/components/kds/production-client-contracts";
 import { AreaSwitchButton } from "@/src/components/kds/area-switch-button";
 import { ItemObservationCallout } from "@/src/components/kds/item-observation-callout";
 import { ItemQuantityPill } from "@/src/components/kds/item-quantity-pill";
+import {
+  LocalCancelOrderDialog,
+  normalizeLocalCancelReason,
+} from "@/src/components/kds/local-cancel-order-dialog";
 import {
   ProtectedSurfaceBanner,
   ProtectedSurfaceFallback,
@@ -385,10 +391,14 @@ function ExternalItemStatusPill({
 
 export function DashboardClient({
   activeKitchenId,
+  canForceLocalCancel = false,
   initialData,
+  managedKitchenIds = [activeKitchenId],
 }: {
   activeKitchenId: KitchenAreaId;
+  canForceLocalCancel?: boolean;
   initialData?: DashboardData;
+  managedKitchenIds?: readonly KitchenAreaId[];
 }) {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -404,6 +414,18 @@ export function DashboardClient({
   const [showSyncAlerts, setShowSyncAlerts] = useState(defaultShowSyncAlerts);
   const [showFilterPanel, setShowFilterPanel] = useState(true);
   const [pageSize, setPageSize] = useState<4 | 6 | 8>(4);
+  const [pendingLocalCancel, setPendingLocalCancel] = useState<{
+    focusKitchenId: KitchenAreaId;
+    focusKitchenName: string;
+    orderId: string;
+    orderStatus: BoardTicketCard["orderStatus"];
+    orderStatusLabel: string;
+    reason: string;
+    ticketStatus: BoardTicketCard["ticketStatus"];
+    ticketStatusLabel: string;
+    reference: string;
+    customerName: string | null;
+  } | null>(null);
   const [newOrderSoundEnabled, setNewOrderSoundEnabled] = useState(
     defaultNewOrderSoundEnabled,
   );
@@ -532,23 +554,46 @@ export function DashboardClient({
       });
     },
     onSuccess: async (_, variables) => {
-      const invalidationKeys = getDashboardInvalidationKeys(
-        variables.orderId,
-        variables.kitchenId,
-      );
-
-      await Promise.all(
-        invalidationKeys.map((queryKey) =>
-          queryClient.invalidateQueries({ queryKey }),
-        ),
-      );
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: boardQueryKey }),
+        queryClient.invalidateQueries({
+          queryKey: [...orderQueryRootKey, variables.orderId],
+        }),
+        queryClient.invalidateQueries({ queryKey: salonQueryKey }),
+      ]);
     },
     onSettled: () => {
       setBusyTicketId(null);
     },
   });
+  const localCancelMutation = useMutation({
+    mutationFn: async ({
+      orderId,
+      reason,
+    }: {
+      orderId: string;
+      reason: string;
+    }) =>
+      fetchJson(`/api/orders/${orderId}/local-cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason }),
+      }),
+    onSuccess: async (_, variables) => {
+      setPendingLocalCancel(null);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: boardQueryKey }),
+        queryClient.invalidateQueries({
+          queryKey: [...orderQueryRootKey, variables.orderId],
+        }),
+        queryClient.invalidateQueries({ queryKey: salonQueryKey }),
+      ]);
+    },
+  });
   const blockingAuthFeedback = getProtectedSurfaceFeedback(boardQuery.error);
-  const actionAuthFeedback = getProtectedSurfaceFeedback(ticketMutation.error);
+  const actionAuthFeedback =
+    getProtectedSurfaceFeedback(ticketMutation.error) ??
+    getProtectedSurfaceFeedback(localCancelMutation.error);
 
   useEffect(() => {
     const applyDashboardPreferences = (preferences: DashboardPreferences | null) => {
@@ -799,7 +844,41 @@ export function DashboardClient({
   const visibleKitchenCount = filteredKitchens.length;
   const newOrderNotificationCount = newOrderNotificationIds.length;
 
-  function openTicket(orderId: string) {
+  function openLocalCancelDialog(ticket: BoardTicketCard) {
+    setPendingLocalCancel({
+      focusKitchenId: ticket.kitchenId,
+      focusKitchenName: ticket.kitchenName,
+      orderId: ticket.orderId,
+      orderStatus: ticket.orderStatus,
+      orderStatusLabel: ticket.orderStatusLabel,
+      reason: "",
+      ticketStatus: ticket.ticketStatus,
+      ticketStatusLabel: ticket.ticketStatusLabel,
+      reference: ticket.reference,
+      customerName: ticket.customerName,
+    });
+  }
+
+  function confirmLocalCancel() {
+    if (!pendingLocalCancel) {
+      return;
+    }
+
+    const normalizedReason = normalizeLocalCancelReason(
+      pendingLocalCancel.reason,
+    );
+
+    if (!normalizedReason) {
+      return;
+    }
+
+    localCancelMutation.mutate({
+      orderId: pendingLocalCancel.orderId,
+      reason: normalizedReason,
+    });
+  }
+
+  function openTicket(orderId: string, focusKitchenId: KitchenAreaId) {
     updateNewOrderNotificationIds((current) =>
       acknowledgeTrackedKitchenOrder(current, orderId),
     );
@@ -824,7 +903,7 @@ export function DashboardClient({
 
     startTransition(() => {
       const searchParams = new URLSearchParams({
-        kitchen: activeKitchenId,
+        kitchen: focusKitchenId,
         returnTo,
       });
 
@@ -1190,7 +1269,7 @@ export function DashboardClient({
           ) : null}
 
           {filteredKitchens.map((kitchen) => {
-            const isActionKitchen = canManageKitchen(activeKitchenId, kitchen.id);
+            const isActionKitchen = canManageKitchen(managedKitchenIds, kitchen.id);
 
             return (
             <Card
@@ -1295,7 +1374,7 @@ export function DashboardClient({
                                   key={ticket.ticketId}
                                   onClick={
                                     isActionKitchen
-                                      ? () => openTicket(ticket.orderId)
+                                      ? () => openTicket(ticket.orderId, ticket.kitchenId)
                                       : undefined
                                   }
                                   onKeyDown={
@@ -1306,7 +1385,7 @@ export function DashboardClient({
                                             event.key === " "
                                           ) {
                                             event.preventDefault();
-                                            openTicket(ticket.orderId);
+                                            openTicket(ticket.orderId, ticket.kitchenId);
                                           }
                                         }
                                       : undefined
@@ -1367,6 +1446,23 @@ export function DashboardClient({
                                           </p>
                                         ) : null}
                                       </div>
+                                    </div>
+                                  ) : null}
+
+                                  {ticket.localCancellation ? (
+                                    <div
+                                      className="rounded-[1.4rem] border border-[color-mix(in_oklab,var(--accent-hot)_45%,white)] bg-[color-mix(in_oklab,var(--accent-hot)_12%,white)] px-4 py-3"
+                                      data-testid={`ticket-local-cancel-marker-${ticket.ticketId}`}
+                                    >
+                                      <p className="text-sm font-semibold uppercase tracking-[0.14em] text-[var(--accent-hot)]">
+                                        {ticket.localCancellation.label}
+                                      </p>
+                                      <p className="mt-1 text-sm leading-6 text-[var(--ink-soft)]">
+                                        {ticket.localCancellation.reason}
+                                      </p>
+                                      <p className="mt-2 font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
+                                        {ticket.localCancellation.actor}
+                                      </p>
                                     </div>
                                   ) : null}
 
@@ -1479,7 +1575,9 @@ export function DashboardClient({
                                     >
                                       {ticket.ticketStatus === "canceled" ? (
                                         <div className="rounded-full border border-[color-mix(in_oklab,var(--accent-hot)_48%,white)] bg-[color-mix(in_oklab,var(--accent-hot)_14%,white)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-[var(--accent-hot)]">
-                                          Cancelado no provedor
+                                          {ticket.localCancellation
+                                            ? "Retirado do fluxo"
+                                            : "Cancelado no provedor"}
                                         </div>
                                       ) : !isActionKitchen ? (
                                         <div className="rounded-full border border-[var(--panel-border)] bg-[var(--panel)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-[var(--ink-muted)]">
@@ -1487,6 +1585,18 @@ export function DashboardClient({
                                         </div>
                                       ) : ticket.ticketStatus !== "ready" ? (
                                         <>
+                                          {canForceLocalCancel ? (
+                                            <Button
+                                              data-testid={`ticket-local-cancel-${ticket.ticketId}`}
+                                              disabled={localCancelMutation.isPending}
+                                              onClick={() => openLocalCancelDialog(ticket)}
+                                              size="sm"
+                                              type="button"
+                                              variant="ghost"
+                                            >
+                                              Retirar do fluxo
+                                            </Button>
+                                          ) : null}
                                           <Button
                                             data-testid={`ticket-action-${ticket.ticketId}`}
                                             disabled={busy}
@@ -1509,9 +1619,23 @@ export function DashboardClient({
                                           </Button>
                                         </>
                                       ) : (
-                                        <Button disabled size="sm" variant="ghost">
-                                          Cozinha concluída
-                                        </Button>
+                                        <div className="flex flex-wrap gap-2">
+                                          {canForceLocalCancel ? (
+                                            <Button
+                                              data-testid={`ticket-local-cancel-${ticket.ticketId}`}
+                                              disabled={localCancelMutation.isPending}
+                                              onClick={() => openLocalCancelDialog(ticket)}
+                                              size="sm"
+                                              type="button"
+                                              variant="ghost"
+                                            >
+                                              Retirar do fluxo
+                                            </Button>
+                                          ) : null}
+                                          <Button disabled size="sm" variant="ghost">
+                                            Cozinha concluída
+                                          </Button>
+                                        </div>
                                       )}
                                     </div>
                                   </div>
@@ -1629,12 +1753,19 @@ export function DashboardClient({
                   ) : null}
                   {hasAuthorizedOrderAccess(
                     board,
-                    activeKitchenId,
+                    managedKitchenIds,
                     alert.orderId,
                   ) ? (
                     <div className="mt-4">
                       <Button asChild size="sm" variant="secondary">
-                        <Link href={`/orders/${alert.orderId}?kitchen=${activeKitchenId}`}>
+                        <Link
+                          href={`/orders/${alert.orderId}?kitchen=${
+                            alert.focusKitchenId &&
+                            canManageKitchen(managedKitchenIds, alert.focusKitchenId)
+                              ? alert.focusKitchenId
+                              : activeKitchenId
+                          }`}
+                        >
                           Abrir pedido afetado
                           <ArrowUpRight className="size-4" />
                         </Link>
@@ -1645,6 +1776,34 @@ export function DashboardClient({
               ))}
             </div>
           </Card>
+        ) : null}
+
+        {pendingLocalCancel ? (
+          <LocalCancelOrderDialog
+            isOpen
+            isPending={localCancelMutation.isPending}
+            onCancel={() => {
+              if (!localCancelMutation.isPending) {
+                setPendingLocalCancel(null);
+              }
+            }}
+            onConfirm={confirmLocalCancel}
+            onReasonChange={(reason) =>
+              setPendingLocalCancel((current) =>
+                current ? { ...current, reason } : current,
+              )
+            }
+            order={{
+              customerName: pendingLocalCancel.customerName,
+              focusKitchenName: pendingLocalCancel.focusKitchenName,
+              focusTicketStatus: pendingLocalCancel.ticketStatus,
+              focusTicketStatusLabel: pendingLocalCancel.ticketStatusLabel,
+              orderStatus: pendingLocalCancel.orderStatus,
+              orderStatusLabel: pendingLocalCancel.orderStatusLabel,
+              reference: pendingLocalCancel.reference,
+            }}
+            reason={pendingLocalCancel.reason}
+          />
         ) : null}
       </div>
     </main>

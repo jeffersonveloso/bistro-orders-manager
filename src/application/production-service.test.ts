@@ -20,6 +20,10 @@ function createAggregate(orderId = "order_sync"): OrderAggregate {
       externalId: orderId.replace("order_", ""),
       reference: "Pedido Sync",
       customerName: "Mesa de teste",
+      localCanceledAt: null,
+      localCanceledByAreaId: null,
+      localCanceledByRole: null,
+      localCancellationReason: null,
       waiterName: "Camila",
       source: "test",
       createdAt: "2026-05-11T12:00:00.000Z",
@@ -133,6 +137,9 @@ function createReadModelRepository({
       return requestedOrderId === orderId ? aggregate : undefined;
     },
     updateItemStatus() {
+      throw new Error("not implemented");
+    },
+    cancelOrderLocally() {
       throw new Error("not implemented");
     },
     startKitchenTicket() {
@@ -938,6 +945,60 @@ describe("production demo scenarios", () => {
     );
   });
 
+  it("hides locally canceled orders from active sync alerts while preserving canceled detail data", () => {
+    const aggregate = createAggregate("order_local_cancel");
+    aggregate.order.reference = "Pedido localmente cancelado";
+    aggregate.order.localCanceledAt = "2026-05-11T12:05:00.000Z";
+    aggregate.order.localCanceledByAreaId = "kitchen-1";
+    aggregate.order.localCanceledByRole = "manager";
+    aggregate.order.localCancellationReason =
+      "Webhook de cancelamento não recebido.";
+
+    const repository = createReadModelRepository({
+      aggregate,
+      unresolvedExceptions: [
+        createSyncException({
+          externalOrderId: "local-cancel",
+          orderId: "order_local_cancel",
+          kind: "canceled_externally",
+        }),
+      ],
+    });
+
+    const dashboard = getDashboardData(repository);
+    const detail = getOrderDetailData(
+      repository,
+      "order_local_cancel",
+      "kitchen-1",
+    );
+
+    expect(dashboard.openSyncExceptions).toBe(0);
+    expect(dashboard.syncAlerts).toEqual([]);
+    expect(
+      dashboard.kitchens
+        .find((kitchen) => kitchen.id === "kitchen-1")
+        ?.columns.find((column) => column.status === "canceled")
+        ?.tickets.find((ticket) => ticket.orderId === "order_local_cancel"),
+    ).toEqual(
+      expect.objectContaining({
+        localCancellation: expect.objectContaining({
+          actor: "Gerência • Cozinha 1",
+          reason: "Webhook de cancelamento não recebido.",
+        }),
+        ticketStatus: "canceled",
+      }),
+    );
+    expect(detail).toEqual(
+      expect.objectContaining({
+        localCancellation: expect.objectContaining({
+          label: "Retirado do fluxo",
+          reason: "Webhook de cancelamento não recebido.",
+        }),
+        orderStatusKey: "canceled",
+      }),
+    );
+  });
+
   it("returns undefined when an aggregate has no kitchen tickets", () => {
     const repository: ProductionRepository = {
       listKitchens() {
@@ -960,15 +1021,23 @@ describe("production demo scenarios", () => {
             externalId: "external-empty",
             reference: "Pedido vazio",
             customerName: null,
+            localCanceledAt: null,
+            localCanceledByAreaId: null,
+            localCanceledByRole: null,
+            localCancellationReason: null,
             source: "test",
             createdAt: "2026-05-11T10:00:00.000Z",
             updatedAt: "2026-05-11T10:00:00.000Z",
+            waiterName: null,
           },
           items: [],
           tickets: [],
         };
       },
       updateItemStatus() {
+        throw new Error("not implemented");
+      },
+      cancelOrderLocally() {
         throw new Error("not implemented");
       },
       startKitchenTicket() {

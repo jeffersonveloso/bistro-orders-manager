@@ -18,6 +18,7 @@ import {
 function createRuntimeConfig() {
   return {
     cookieName: "bistro_area_session",
+    elevatedPins: {},
     pins: {
       "kitchen-1": "1111",
       "kitchen-2": "2222",
@@ -35,9 +36,11 @@ function createRuntimeConfig() {
 
 function createSession(overrides: Partial<AreaSession> = {}): AreaSession {
   return {
+    allowedAreaIds: ["kitchen-1"],
     areaId: "kitchen-1",
     expiresAt: "2026-05-13T16:00:00.000Z",
     issuedAt: "2026-05-13T00:00:00.000Z",
+    role: "station",
     version: 1,
     ...overrides,
   };
@@ -57,6 +60,10 @@ describe("area session infrastructure", () => {
     expect(config.sessionTtlSeconds).toBe(57_600);
     expect(config.renewalWindowMs).toBe(14_400_000);
     expect(config.secureCookies).toBe(false);
+    expect(config.elevatedPins).toEqual({
+      admin: undefined,
+      manager: undefined,
+    });
   });
 
   it("fails deterministically when required access env configuration is missing", () => {
@@ -197,6 +204,37 @@ describe("area session infrastructure", () => {
         new Date("2026-05-13T12:01:00.000Z"),
       ),
     ).toContain("bistro_area_session=v1.");
+  });
+
+  it("accepts older signed payloads without role metadata and normalizes them to a station session", () => {
+    const config = createRuntimeConfig();
+    const legacyValue = signAreaSession(
+      {
+        areaId: "kitchen-2",
+        expiresAt: "2026-05-13T16:00:00.000Z",
+        issuedAt: "2026-05-13T00:00:00.000Z",
+        version: 1,
+      } as AreaSession,
+      config,
+    );
+
+    expect(
+      verifyAreaSessionValue(
+        legacyValue,
+        config,
+        new Date("2026-05-13T12:00:00.000Z"),
+      ),
+    ).toEqual({
+      ok: true,
+      session: {
+        allowedAreaIds: ["kitchen-2"],
+        areaId: "kitchen-2",
+        expiresAt: "2026-05-13T16:00:00.000Z",
+        issuedAt: "2026-05-13T00:00:00.000Z",
+        role: "station",
+        version: 1,
+      },
+    });
   });
 
   it("derives request origin and cookie security from the effective request protocol", () => {

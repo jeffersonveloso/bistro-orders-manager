@@ -6,6 +6,7 @@ import {
   deriveOrderStatus,
   deriveTicketStatus,
   type ItemStatus,
+  isLocallyCanceledOrder,
   type OrderAggregate,
   type OrderStatus,
   isKitchenId,
@@ -14,6 +15,7 @@ import {
   type TicketStatus,
   TICKET_STATUS_LABELS,
 } from "@/src/domain/production";
+import { type AccessRole, type AreaId } from "@/src/domain/area-access";
 import type {
   SyncExceptionKind,
   SyncExceptionRecord,
@@ -58,6 +60,16 @@ export interface SyncTrailEntry {
   detail: string | null;
   occurredAt: string;
   actor: string | null;
+}
+
+export interface LocalCancellationPresentation {
+  actor: string;
+  canceledAt: string;
+  detail: string;
+  label: string;
+  reason: string;
+  role: Extract<AccessRole, "manager" | "admin">;
+  sourceAreaId: AreaId;
 }
 
 export interface SyncAlert {
@@ -153,6 +165,7 @@ export interface BoardTicketCard {
   currentItems: OrderItemPresentation[];
   otherKitchenStatus: string | null;
   otherKitchenName: string | null;
+  localCancellation: LocalCancellationPresentation | null;
   hasOpenSyncException: boolean;
   syncExceptionLabel: string | null;
   syncExceptionStatusLabel: string | null;
@@ -227,6 +240,7 @@ export interface OrderDetailData {
     status: string;
     items: OrderItemPresentation[];
   } | null;
+  localCancellation: LocalCancellationPresentation | null;
   syncException: SyncExceptionPresentation | null;
   syncTrail: SyncTrailEntry[];
 }
@@ -419,6 +433,58 @@ function humanizeExceptionActor(value: string | null) {
     default:
       return value;
   }
+}
+
+function humanizeAccessRole(
+  role: Extract<AccessRole, "manager" | "admin">,
+) {
+  return role === "admin" ? "Administração" : "Gerência";
+}
+
+function humanizeAreaId(areaId: AreaId) {
+  switch (areaId) {
+    case "kitchen-1":
+      return "Cozinha 1";
+    case "kitchen-2":
+      return "Cozinha 2";
+    case "salon":
+      return "Salão";
+  }
+}
+
+function toLocalCancellationPresentation(
+  order: Pick<
+    OrderAggregate["order"],
+    | "localCanceledAt"
+    | "localCanceledByAreaId"
+    | "localCanceledByRole"
+    | "localCancellationReason"
+  >,
+): LocalCancellationPresentation | null {
+  if (
+    !order.localCanceledAt ||
+    !order.localCanceledByAreaId ||
+    !order.localCanceledByRole ||
+    (order.localCanceledByRole !== "manager" &&
+      order.localCanceledByRole !== "admin")
+  ) {
+    return null;
+  }
+
+  const actor = `${humanizeAccessRole(order.localCanceledByRole)} • ${humanizeAreaId(
+    order.localCanceledByAreaId,
+  )}`;
+  const reason = order.localCancellationReason ?? "Sem motivo informado.";
+
+  return {
+    actor,
+    canceledAt: order.localCanceledAt,
+    detail: `${actor} retirou este pedido do fluxo operacional.`,
+    label: "Retirado do fluxo",
+    reason,
+    role: order.localCanceledByRole,
+    sourceAreaId: order.localCanceledByAreaId,
+  };
 }
 
 function toSyncExceptionPresentation(
@@ -678,11 +744,16 @@ function isCanceledExternalStatus(
 }
 
 function deriveOperationalTicketStatus(
+  order: Pick<OrderAggregate["order"], "localCanceledAt">,
   ticket: Pick<OrderAggregate["tickets"][number], "startedAt"> | undefined,
   items: OrderAggregate["items"],
   itemStatuses: Map<string, ExternalItemStatusPresentation>,
   exception?: SyncExceptionRecord,
 ): TicketStatus {
+  if (isLocallyCanceledOrder(order)) {
+    return "canceled";
+  }
+
   if (exception?.kind === "canceled_externally") {
     return "canceled";
   }
@@ -732,6 +803,7 @@ function buildOperationalTicketStatuses(
       ticket.kitchenId,
       projectProviderStatusToTicketStatus(
         deriveOperationalTicketStatus(
+          aggregate.order,
           ticket,
           aggregate.items.filter((item) => item.kitchenId === ticket.kitchenId),
           itemStatuses,
@@ -876,10 +948,11 @@ function buildSalonSummary(
         const kitchen = context.kitchens.find(
           (candidate) => candidate.id === ticket.kitchenId,
         );
-        const status =
+      const status =
           ticketStatusesByKitchenId.get(ticket.kitchenId) ??
           projectProviderStatusToTicketStatus(
             deriveOperationalTicketStatus(
+              aggregate.order,
               ticket,
               aggregate.items.filter((item) => item.kitchenId === ticket.kitchenId),
               itemStatuses,
@@ -901,6 +974,7 @@ function buildSalonSummary(
             ticketStatusesByKitchenId.get(ticket.kitchenId) ??
             projectProviderStatusToTicketStatus(
               deriveOperationalTicketStatus(
+                aggregate.order,
                 ticket,
                 aggregate.items.filter((item) => item.kitchenId === ticket.kitchenId),
                 itemStatuses,
@@ -929,6 +1003,18 @@ function buildSalonSummary(
     });
 }
 
+function getOperationalUnresolvedExceptions(context: ProductionReadContext) {
+  return context.unresolvedExceptions.filter((exception) => {
+    if (!exception.orderId) {
+      return true;
+    }
+
+    const aggregate = context.aggregateByOrderId.get(exception.orderId);
+
+    return !aggregate || !isLocallyCanceledOrder(aggregate.order);
+  });
+}
+
 function buildDashboardMetrics(
   salonSummary: SalonSummaryOrder[],
 ): DashboardMetrics {
@@ -946,7 +1032,7 @@ function buildDashboardMetrics(
 }
 
 function buildSyncAlerts(context: ProductionReadContext): SyncAlert[] {
-  return context.unresolvedExceptions.map<SyncAlert>((exception) => {
+  return getOperationalUnresolvedExceptions(context).map<SyncAlert>((exception) => {
     const presentation = toSyncExceptionPresentation(exception);
     const aggregate = exception.orderId
       ? context.aggregateByOrderId.get(exception.orderId)
@@ -1018,6 +1104,7 @@ export function getDashboardData(repository: ProductionRepository): DashboardDat
             const syncPresentation = syncException
               ? toSyncExceptionPresentation(syncException)
               : null;
+            const localCancellation = toLocalCancellationPresentation(aggregate.order);
             const providerState = context.syncRepository
               ? context.syncRepository.getProviderOrder({
                   provider: "anota_ai",
@@ -1038,6 +1125,7 @@ export function getDashboardData(repository: ProductionRepository): DashboardDat
               ticketStatusesByKitchenId.get(kitchen.id) ??
               projectProviderStatusToTicketStatus(
                 deriveOperationalTicketStatus(
+                  aggregate.order,
                   ticket,
                   ticketItems,
                   itemStatuses,
@@ -1052,15 +1140,16 @@ export function getDashboardData(repository: ProductionRepository): DashboardDat
                     ticketStatusesByKitchenId.get(candidate.kitchenId) ??
                     projectProviderStatusToTicketStatus(
                       deriveOperationalTicketStatus(
+                        aggregate.order,
                         candidate,
                         aggregate.items.filter(
                           (item) => item.kitchenId === candidate.kitchenId,
                         ),
-                      itemStatuses,
-                      syncException,
+                        itemStatuses,
+                        syncException,
+                      ),
+                      providerState?.providerStatus,
                     ),
-                    providerState?.providerStatus,
-                  ),
               })),
             );
 
@@ -1078,11 +1167,13 @@ export function getDashboardData(repository: ProductionRepository): DashboardDat
               orderStatusLabel: ORDER_STATUS_LABELS[orderStatus],
               ageLabel: formatAgeLabel(aggregate.order.createdAt),
               currentItems: toOrderItemPresentation(ticketItems, itemStatuses),
+              localCancellation,
               otherKitchenStatus: otherTicket
                 ? TICKET_STATUS_LABELS[
                     ticketStatusesByKitchenId.get(otherTicket.kitchenId) ??
                       projectProviderStatusToTicketStatus(
                         deriveOperationalTicketStatus(
+                          aggregate.order,
                           otherTicket,
                           otherItems,
                           itemStatuses,
@@ -1130,7 +1221,7 @@ export function getDashboardData(repository: ProductionRepository): DashboardDat
 
   return {
     kitchens: kitchenBoards,
-    openSyncExceptions: context.unresolvedExceptions.length,
+    openSyncExceptions: getOperationalUnresolvedExceptions(context).length,
     syncAlerts: buildSyncAlerts(context),
     salonSummary,
     metrics: buildDashboardMetrics(salonSummary),
@@ -1148,7 +1239,7 @@ export function getSalonData(repository: ProductionRepository): SalonData {
   return {
     summary,
     metrics: buildDashboardMetrics(summary),
-    openSyncExceptions: context.unresolvedExceptions.length,
+    openSyncExceptions: getOperationalUnresolvedExceptions(context).length,
     generatedAt: new Date().toISOString(),
   };
 }
@@ -1200,6 +1291,7 @@ export function getOrderDetailData(
   const syncTrail = syncRepository
     ? buildSyncTrail(syncRepository.listSyncExceptionsForOrder(orderId))
     : [];
+  const localCancellation = toLocalCancellationPresentation(aggregate.order);
   const itemStatuses = buildItemExternalStatuses(syncException, aggregate);
   const ticketStatusesByKitchenId = buildOperationalTicketStatuses(
     aggregate,
@@ -1211,6 +1303,7 @@ export function getOrderDetailData(
     ticketStatusesByKitchenId.get(focusKitchenId) ??
     projectProviderStatusToTicketStatus(
       deriveOperationalTicketStatus(
+        aggregate.order,
         aggregate.tickets.find((ticket) => ticket.kitchenId === focusKitchenId),
         focusItems,
         itemStatuses,
@@ -1225,6 +1318,7 @@ export function getOrderDetailData(
         ticketStatusesByKitchenId.get(ticket.kitchenId) ??
         projectProviderStatusToTicketStatus(
           deriveOperationalTicketStatus(
+            aggregate.order,
             ticket,
             aggregate.items.filter((item) => item.kitchenId === ticket.kitchenId),
             itemStatuses,
@@ -1247,6 +1341,7 @@ export function getOrderDetailData(
     orderStatusKey: orderStatus,
     orderStatus: ORDER_STATUS_LABELS[orderStatus],
     focusItems: toOrderItemPresentation(focusItems, itemStatuses),
+    localCancellation,
     otherKitchen: otherKitchen
       ? {
           id: otherKitchen.kitchenId,
@@ -1257,6 +1352,7 @@ export function getOrderDetailData(
             ticketStatusesByKitchenId.get(otherKitchen.kitchenId) ??
             projectProviderStatusToTicketStatus(
               deriveOperationalTicketStatus(
+                aggregate.order,
                 otherKitchen,
                 otherItems,
                 itemStatuses,
@@ -1269,6 +1365,7 @@ export function getOrderDetailData(
               ticketStatusesByKitchenId.get(otherKitchen.kitchenId) ??
                 projectProviderStatusToTicketStatus(
                   deriveOperationalTicketStatus(
+                    aggregate.order,
                     otherKitchen,
                     otherItems,
                     itemStatuses,
@@ -1310,4 +1407,16 @@ export function completeTicketProduction(
   kitchenId: KitchenId,
 ) {
   return repository.completeKitchenTicket(orderId, kitchenId);
+}
+
+export function cancelOrderLocally(
+  repository: ProductionRepository,
+  orderId: string,
+  input: {
+    canceledByAreaId: AreaId;
+    canceledByRole: Extract<AccessRole, "manager" | "admin">;
+    reason: string;
+  },
+) {
+  return repository.cancelOrderLocally(orderId, input);
 }
