@@ -202,6 +202,8 @@ function migrate(db: SqliteDatabase) {
       notes TEXT,
       kitchen_id TEXT NOT NULL REFERENCES kitchens(id),
       status TEXT NOT NULL CHECK(status IN ('new', 'in_preparation', 'ready')),
+      provider_added_at TEXT,
+      provider_removed_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       UNIQUE(order_id, external_item_id)
@@ -302,6 +304,7 @@ function migrate(db: SqliteDatabase) {
   ensureProviderCatalogItemColumns(db);
   ensureOrderMetadataColumns(db);
   ensureKitchenTicketMetadataColumns(db);
+  ensureOrderItemMetadataColumns(db);
 }
 
 function ensureProviderMappingColumns(db: SqliteDatabase) {
@@ -451,6 +454,32 @@ function ensureKitchenTicketMetadataColumns(db: SqliteDatabase) {
     db.exec(`
       ALTER TABLE kitchen_tickets
       ADD COLUMN started_at TEXT
+    `);
+  }
+}
+
+function ensureOrderItemMetadataColumns(db: SqliteDatabase) {
+  const columns = db
+    .prepare("PRAGMA table_info(order_items)")
+    .all() as Array<{ name: string }>;
+  const hasProviderAddedAt = columns.some(
+    (column) => column.name === "provider_added_at",
+  );
+  const hasProviderRemovedAt = columns.some(
+    (column) => column.name === "provider_removed_at",
+  );
+
+  if (!hasProviderAddedAt) {
+    db.exec(`
+      ALTER TABLE order_items
+      ADD COLUMN provider_added_at TEXT
+    `);
+  }
+
+  if (!hasProviderRemovedAt) {
+    db.exec(`
+      ALTER TABLE order_items
+      ADD COLUMN provider_removed_at TEXT
     `);
   }
 }
@@ -724,6 +753,8 @@ function loadAggregateRows(db: SqliteDatabase) {
           notes,
           kitchen_id as kitchenId,
           status,
+          provider_added_at as providerAddedAt,
+          provider_removed_at as providerRemovedAt,
           created_at as createdAt,
           updated_at as updatedAt
         FROM order_items
@@ -1027,6 +1058,8 @@ function createProductionRepository(db: SqliteDatabase): SqliteProductionReposit
       notes,
       kitchen_id,
       status,
+      provider_added_at,
+      provider_removed_at,
       created_at,
       updated_at
     )
@@ -1040,6 +1073,8 @@ function createProductionRepository(db: SqliteDatabase): SqliteProductionReposit
       @notes,
       @kitchenId,
       @status,
+      @providerAddedAt,
+      @providerRemovedAt,
       @createdAt,
       @updatedAt
     )
@@ -1055,6 +1090,171 @@ function createProductionRepository(db: SqliteDatabase): SqliteProductionReposit
 
     for (const item of payload.items) {
       insertItem.run(item);
+    }
+  });
+
+  const upsertImportedOrder = db.prepare(`
+    INSERT INTO orders (
+      id,
+      external_id,
+      reference,
+      customer_name,
+      local_canceled_at,
+      local_canceled_by_area_id,
+      local_canceled_by_role,
+      local_cancellation_reason,
+      waiter_name,
+      source,
+      created_at,
+      updated_at
+    )
+    VALUES (
+      @id,
+      @externalId,
+      @reference,
+      @customerName,
+      @localCanceledAt,
+      @localCanceledByAreaId,
+      @localCanceledByRole,
+      @localCancellationReason,
+      @waiterName,
+      @source,
+      @createdAt,
+      @updatedAt
+    )
+    ON CONFLICT(id) DO UPDATE SET
+      external_id = excluded.external_id,
+      reference = excluded.reference,
+      customer_name = excluded.customer_name,
+      local_canceled_at = excluded.local_canceled_at,
+      local_canceled_by_area_id = excluded.local_canceled_by_area_id,
+      local_canceled_by_role = excluded.local_canceled_by_role,
+      local_cancellation_reason = excluded.local_cancellation_reason,
+      waiter_name = excluded.waiter_name,
+      source = excluded.source,
+      created_at = excluded.created_at,
+      updated_at = excluded.updated_at
+  `);
+
+  const upsertImportedTicket = db.prepare(`
+    INSERT INTO kitchen_tickets (
+      id,
+      order_id,
+      kitchen_id,
+      started_at,
+      created_at,
+      updated_at
+    )
+    VALUES (
+      @id,
+      @orderId,
+      @kitchenId,
+      @startedAt,
+      @createdAt,
+      @updatedAt
+    )
+    ON CONFLICT(id) DO UPDATE SET
+      order_id = excluded.order_id,
+      kitchen_id = excluded.kitchen_id,
+      started_at = excluded.started_at,
+      created_at = excluded.created_at,
+      updated_at = excluded.updated_at
+  `);
+
+  const upsertImportedItem = db.prepare(`
+    INSERT INTO order_items (
+      id,
+      order_id,
+      external_item_id,
+      menu_item_id,
+      name,
+      quantity,
+      notes,
+      kitchen_id,
+      status,
+      provider_added_at,
+      provider_removed_at,
+      created_at,
+      updated_at
+    )
+    VALUES (
+      @id,
+      @orderId,
+      @externalItemId,
+      @menuItemId,
+      @name,
+      @quantity,
+      @notes,
+      @kitchenId,
+      @status,
+      @providerAddedAt,
+      @providerRemovedAt,
+      @createdAt,
+      @updatedAt
+    )
+    ON CONFLICT(id) DO UPDATE SET
+      order_id = excluded.order_id,
+      external_item_id = excluded.external_item_id,
+      menu_item_id = excluded.menu_item_id,
+      name = excluded.name,
+      quantity = excluded.quantity,
+      notes = excluded.notes,
+      kitchen_id = excluded.kitchen_id,
+      status = excluded.status,
+      provider_added_at = excluded.provider_added_at,
+      provider_removed_at = excluded.provider_removed_at,
+      created_at = excluded.created_at,
+      updated_at = excluded.updated_at
+  `);
+
+  const replaceImportedOrder = db.transaction((payload: SplitOrderResult) => {
+    upsertImportedOrder.run(payload.order);
+
+    for (const ticket of payload.tickets) {
+      upsertImportedTicket.run(ticket);
+    }
+
+    for (const item of payload.items) {
+      upsertImportedItem.run(item);
+    }
+
+    const activeTicketIds = payload.tickets.map((ticket) => ticket.id);
+    const activeItemIds = payload.items.map((item) => item.id);
+
+    if (activeTicketIds.length > 0) {
+      const ticketPlaceholders = activeTicketIds.map(() => "?").join(", ");
+
+      db.prepare(
+        `
+          DELETE FROM kitchen_tickets
+          WHERE order_id = ? AND id NOT IN (${ticketPlaceholders})
+        `,
+      ).run(payload.order.id, ...activeTicketIds);
+    } else {
+      db.prepare(
+        `
+          DELETE FROM kitchen_tickets
+          WHERE order_id = ?
+        `,
+      ).run(payload.order.id);
+    }
+
+    if (activeItemIds.length > 0) {
+      const itemPlaceholders = activeItemIds.map(() => "?").join(", ");
+
+      db.prepare(
+        `
+          DELETE FROM order_items
+          WHERE order_id = ? AND id NOT IN (${itemPlaceholders})
+        `,
+      ).run(payload.order.id, ...activeItemIds);
+    } else {
+      db.prepare(
+        `
+          DELETE FROM order_items
+          WHERE order_id = ?
+        `,
+      ).run(payload.order.id);
     }
   });
 
@@ -1554,6 +1754,9 @@ function createProductionRepository(db: SqliteDatabase): SqliteProductionReposit
     },
     saveImportedOrder(order) {
       persistImportedOrder(order);
+    },
+    replaceImportedOrder(order) {
+      replaceImportedOrder(order);
     },
     listOrderAggregates() {
       const { orders, tickets, items } = loadAggregateRows(db);

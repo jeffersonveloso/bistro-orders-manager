@@ -24,6 +24,7 @@ import type {
 import {
   MissingKitchenMappingError,
   splitProviderOrder,
+  type SplitOrderResult,
 } from "@/src/domain/split-order-service";
 
 type ProviderSyncRepositoryBundle = ProductionRepository & ProviderSyncRepository;
@@ -109,6 +110,20 @@ interface ImportedOrderContext {
 interface ReplayCandidate {
   externalOrderId: string;
   priorityCursor: string;
+}
+
+export class ApplyChangedExceptionError extends Error {
+  constructor(
+    message: string,
+    readonly code:
+      | "invalid_exception"
+      | "missing_provider_state"
+      | "missing_mapping"
+      | "locally_canceled",
+  ) {
+    super(message);
+    this.name = "ApplyChangedExceptionError";
+  }
 }
 
 export function createProviderSyncService(
@@ -336,7 +351,407 @@ export function createProviderSyncService(
         options.repository.acknowledgeException(input);
       });
     },
+
+    async applyChangedException(input) {
+      options.repository.runInTransaction(() => {
+        applyChangedException({
+          appliedAt: input.appliedAt ?? now(),
+          appliedVia: input.appliedVia,
+          exceptionId: input.exceptionId,
+          orderId: input.orderId,
+          provider: options.provider,
+          repository: options.repository,
+          resolutionNote: input.resolutionNote,
+        });
+      });
+    },
   };
+}
+
+function applyChangedException({
+  appliedAt,
+  appliedVia,
+  exceptionId,
+  orderId,
+  provider,
+  repository,
+  resolutionNote,
+}: {
+  appliedAt: string;
+  appliedVia: string;
+  exceptionId: string;
+  orderId: string;
+  provider: OrderSyncProviderPort;
+  repository: ProviderSyncRepositoryBundle;
+  resolutionNote?: string;
+}) {
+  const exception = repository
+    .listSyncExceptionsForOrder(orderId)
+    .find((candidate) => candidate.id === exceptionId);
+
+  if (!exception || exception.status === "resolved") {
+    throw new ApplyChangedExceptionError(
+      `Sync exception "${exceptionId}" is not linked to order "${orderId}" or is already resolved`,
+      "invalid_exception",
+    );
+  }
+
+  if (exception.kind !== "changed_externally") {
+    throw new ApplyChangedExceptionError(
+      `Sync exception "${exceptionId}" cannot be applied`,
+      "invalid_exception",
+    );
+  }
+
+  const aggregate = repository.getOrderAggregate(orderId);
+
+  if (!aggregate) {
+    throw new ApplyChangedExceptionError(
+      `Order "${orderId}" no longer exists locally`,
+      "invalid_exception",
+    );
+  }
+
+  if (aggregate.order.localCanceledAt) {
+    throw new ApplyChangedExceptionError(
+      `Order "${orderId}" was removed from the local workflow`,
+      "locally_canceled",
+    );
+  }
+
+  const externalOrderId = exception.externalOrderId ?? aggregate.order.externalId;
+  const providerState = repository.getProviderOrder({
+    provider: exception.provider,
+    externalOrderId,
+  });
+
+  if (!providerState) {
+    throw new ApplyChangedExceptionError(
+      `Provider state for "${externalOrderId}" is unavailable`,
+      "missing_provider_state",
+    );
+  }
+
+  let nextSplitOrder: SplitOrderResult;
+
+  try {
+    nextSplitOrder = splitProviderOrder(
+      normalizeSnapshotOrThrow(provider, providerState.snapshot),
+      repository.listKitchenMappings(),
+    );
+  } catch (error) {
+    if (error instanceof MissingKitchenMappingError) {
+      throw new ApplyChangedExceptionError(
+        error.message,
+        "missing_mapping",
+      );
+    }
+
+    throw error;
+  }
+
+  repository.replaceImportedOrder(
+    buildAppliedSplitOrderResult({
+      aggregate,
+      appliedAt,
+      exception,
+      nextSplitOrder,
+    }),
+  );
+  repository.upsertProviderOrder({
+    ...providerState,
+    importedOrderId: orderId,
+    lastAppliedAt: appliedAt,
+  });
+  repository.resolveException({
+    provider: exception.provider,
+    kind: exception.kind,
+    externalOrderId: exception.externalOrderId,
+    orderId,
+    resolvedAt: appliedAt,
+    resolvedVia: appliedVia,
+    resolutionNote:
+      resolutionNote ??
+      "Latest provider snapshot was applied to the local production order.",
+  });
+}
+
+function buildAppliedSplitOrderResult({
+  aggregate,
+  appliedAt,
+  exception,
+  nextSplitOrder,
+}: {
+  aggregate: OrderAggregate;
+  appliedAt: string;
+  exception: SyncExceptionRecord;
+  nextSplitOrder: SplitOrderResult;
+}) {
+  const existingItemsByExternalId = new Map(
+    aggregate.items.map((item) => [item.externalItemId, item] as const),
+  );
+  const existingTicketsByKitchenId = new Map(
+    aggregate.tickets.map((ticket) => [ticket.kitchenId, ticket] as const),
+  );
+  const addedExternalItemIds = collectAddedExternalItemIdsFromException(exception);
+  const itemsRequiringReset = collectItemResetsFromException(exception, aggregate);
+  const removedItems = collectRemovedItemsFromException(exception, aggregate);
+  const nextItems = nextSplitOrder.items.map((item) => {
+    const existingItem = existingItemsByExternalId.get(item.externalItemId);
+
+    return {
+      ...item,
+      createdAt: existingItem?.createdAt ?? appliedAt,
+      providerAddedAt:
+        existingItem?.providerAddedAt ??
+        (addedExternalItemIds.has(item.externalItemId) ? appliedAt : null),
+      providerRemovedAt: null,
+      status: resolveAppliedItemStatus(
+        existingItem?.status ?? null,
+        existingItem ? itemsRequiringReset.has(existingItem.id) : false,
+      ),
+      updatedAt: appliedAt,
+    };
+  });
+  const preservedRemovedItems = removedItems
+    .filter(
+      (removedItem) =>
+        !nextItems.some((nextItem) => nextItem.id === removedItem.id),
+    )
+    .map((removedItem) => ({
+      ...removedItem,
+      providerRemovedAt: appliedAt,
+      updatedAt: appliedAt,
+    }));
+  const nextTickets = nextSplitOrder.tickets.map((ticket) => {
+    const existingTicket = existingTicketsByKitchenId.get(ticket.kitchenId);
+
+    return {
+      ...ticket,
+      createdAt: existingTicket?.createdAt ?? appliedAt,
+      startedAt: existingTicket?.startedAt ?? null,
+      updatedAt: appliedAt,
+    };
+  });
+  const removedTicketKitchenIds = new Set(
+    preservedRemovedItems.map((item) => item.kitchenId),
+  );
+  const preservedRemovedTickets = aggregate.tickets
+    .filter(
+      (ticket) =>
+        removedTicketKitchenIds.has(ticket.kitchenId) &&
+        !nextTickets.some((candidate) => candidate.id === ticket.id),
+    )
+    .map((ticket) => ({
+      ...ticket,
+      updatedAt: appliedAt,
+    }));
+
+  return {
+    order: {
+      ...nextSplitOrder.order,
+      createdAt: aggregate.order.createdAt,
+      localCanceledAt: aggregate.order.localCanceledAt,
+      localCanceledByAreaId: aggregate.order.localCanceledByAreaId,
+      localCanceledByRole: aggregate.order.localCanceledByRole,
+      localCancellationReason: aggregate.order.localCancellationReason,
+      updatedAt: appliedAt,
+    },
+    items: [...nextItems, ...preservedRemovedItems],
+    tickets: [...nextTickets, ...preservedRemovedTickets],
+  } satisfies SplitOrderResult;
+}
+
+function collectAddedExternalItemIdsFromException(exception: SyncExceptionRecord) {
+  if (!isRecord(exception.details)) {
+    return new Set<string>();
+  }
+
+  const diffs = Array.isArray(exception.details.diffs) ? exception.details.diffs : [];
+  const externalItemIds = new Set<string>();
+
+  for (const rawDiff of diffs) {
+    if (!isRecord(rawDiff)) {
+      continue;
+    }
+
+    const type = normalizeOptionalString(
+      typeof rawDiff.type === "string" ? rawDiff.type : null,
+    );
+    const externalItemId = normalizeOptionalString(
+      typeof rawDiff.externalItemId === "string"
+        ? rawDiff.externalItemId
+        : null,
+    );
+
+    if (type === "item_added" && externalItemId) {
+      externalItemIds.add(externalItemId);
+    }
+  }
+
+  return externalItemIds;
+}
+
+function collectItemResetsFromException(
+  exception: SyncExceptionRecord,
+  aggregate: OrderAggregate,
+) {
+  if (!isRecord(exception.details)) {
+    return new Set<string>();
+  }
+
+  const diffs = Array.isArray(exception.details.diffs) ? exception.details.diffs : [];
+  const itemIds = new Set<string>();
+
+  for (const rawDiff of diffs) {
+    if (!isRecord(rawDiff)) {
+      continue;
+    }
+
+    const type = normalizeOptionalString(
+      typeof rawDiff.type === "string" ? rawDiff.type : null,
+    );
+
+    if (!type || !doesDiffRequireItemReset(type, rawDiff)) {
+      continue;
+    }
+
+    for (const item of resolveAggregateItemsForDiff(aggregate, rawDiff)) {
+      itemIds.add(item.id);
+    }
+  }
+
+  return itemIds;
+}
+
+function collectRemovedItemsFromException(
+  exception: SyncExceptionRecord,
+  aggregate: OrderAggregate,
+) {
+  if (!isRecord(exception.details)) {
+    return [] as OrderAggregate["items"];
+  }
+
+  const diffs = Array.isArray(exception.details.diffs) ? exception.details.diffs : [];
+  const removedItems = new Map<string, OrderAggregate["items"][number]>();
+
+  for (const rawDiff of diffs) {
+    if (!isRecord(rawDiff)) {
+      continue;
+    }
+
+    const type = normalizeOptionalString(
+      typeof rawDiff.type === "string" ? rawDiff.type : null,
+    );
+
+    if (type !== "item_removed") {
+      continue;
+    }
+
+    for (const item of resolveAggregateItemsForDiff(aggregate, rawDiff)) {
+      removedItems.set(item.id, item);
+    }
+  }
+
+  return [...removedItems.values()];
+}
+
+function resolveAggregateItemsForDiff(
+  aggregate: OrderAggregate,
+  diff: Record<string, unknown>,
+) {
+  const externalItemId = normalizeOptionalString(
+    typeof diff.externalItemId === "string" ? diff.externalItemId : null,
+  );
+
+  if (externalItemId) {
+    const exactExternalIdMatches = aggregate.items.filter(
+      (item) => item.externalItemId === externalItemId,
+    );
+
+    if (exactExternalIdMatches.length === 1) {
+      return exactExternalIdMatches;
+    }
+  }
+
+  const before = isRecord(diff.before) ? diff.before : null;
+  const after = isRecord(diff.after) ? diff.after : null;
+  const menuItemId =
+    normalizeOptionalString(
+      typeof before?.menuItemId === "string" ? before.menuItemId : null,
+    ) ??
+    normalizeOptionalString(
+      typeof after?.menuItemId === "string" ? after.menuItemId : null,
+    );
+  const itemName =
+    normalizeOptionalString(typeof before?.name === "string" ? before.name : null) ??
+    normalizeOptionalString(typeof after?.name === "string" ? after.name : null);
+  const itemNotes =
+    normalizeOptionalString(
+      typeof before?.notes === "string" ? before.notes : null,
+    ) ??
+    normalizeOptionalString(typeof after?.notes === "string" ? after.notes : null);
+
+  if (!menuItemId && !itemName) {
+    return [];
+  }
+
+  let matches = aggregate.items;
+
+  if (menuItemId) {
+    matches = matches.filter((item) => item.menuItemId === menuItemId);
+  }
+
+  if (itemName) {
+    matches = matches.filter((item) => item.name === itemName);
+  }
+
+  if (itemNotes) {
+    matches = matches.filter((item) => item.notes === itemNotes);
+  }
+
+  return matches;
+}
+
+function doesDiffRequireItemReset(
+  type: string,
+  diff: Record<string, unknown>,
+) {
+  switch (type) {
+    case "item_added":
+    case "menu_item_changed":
+    case "name_changed":
+    case "item_notes_changed":
+    case "modifiers_changed":
+      return true;
+    case "quantity_changed": {
+      const beforeValue = asNullableNumber(diff.before);
+      const afterValue = asNullableNumber(diff.after);
+
+      if (beforeValue === null || afterValue === null) {
+        return true;
+      }
+
+      return afterValue > beforeValue;
+    }
+    default:
+      return false;
+  }
+}
+
+function resolveAppliedItemStatus(
+  currentStatus: OrderAggregate["items"][number]["status"] | null,
+  requiresReset: boolean,
+) {
+  if (!currentStatus) {
+    return "new" as const;
+  }
+
+  if (!requiresReset) {
+    return currentStatus;
+  }
+
+  return currentStatus === "in_preparation" ? "in_preparation" : "new";
 }
 
 async function runWebhookSync({
@@ -1465,6 +1880,10 @@ function normalizeNullableText(value: string | null | undefined) {
   const normalizedValue = normalizeOptionalString(value);
 
   return normalizedValue ?? null;
+}
+
+function asNullableNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function extractErrorMessage(error: unknown) {

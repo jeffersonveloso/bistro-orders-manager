@@ -144,6 +144,14 @@ export interface AcknowledgeExceptionInput {
   acknowledgedAt?: string;
 }
 
+export interface ApplyChangedExceptionInput {
+  orderId: string;
+  exceptionId: string;
+  appliedVia: string;
+  resolutionNote?: string;
+  appliedAt?: string;
+}
+
 export interface InboundProviderEvent {
   provider: ProviderName;
   deliveryKey: string;
@@ -250,6 +258,7 @@ export interface OpenSyncExceptionInput {
 }
 
 export type AcknowledgeSyncExceptionInput = AcknowledgeExceptionInput;
+export type ApplyChangedSyncExceptionInput = ApplyChangedExceptionInput;
 
 export interface ResolveSyncExceptionInput {
   provider: ProviderName;

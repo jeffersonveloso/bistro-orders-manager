@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { OrderSyncProviderPort } from "@/src/application/ports";
+import {
+  getDashboardData,
+  getOrderDetailData,
+} from "@/src/application/production-service";
 import { createProviderSyncService } from "@/src/application/provider-sync-service";
 import type { ProviderOrderSnapshot } from "@/src/domain/provider-sync";
 import { createMockOrderSyncProvider } from "@/src/infrastructure/mock-order-provider";
@@ -929,6 +933,282 @@ describe("provider sync service", () => {
             }),
           ]),
         }),
+      );
+    } finally {
+      context.close();
+    }
+  });
+
+  it("applies changed_externally additions to the local order and reopens the affected kitchen", async () => {
+    const snapshot = createSnapshot("external-apply-added-item");
+    const provider = createMutableSyncProvider([snapshot]);
+    const context = createProductionTestContext();
+    const service = createProviderSyncService({
+      provider,
+      repository: context.repository,
+    });
+
+    try {
+      const imported = await service.handleWebhook({
+        provider: "anota_ai",
+        deliveryKey: "delivery-apply-added-item-1",
+        eventType: "order.confirmed",
+        externalOrderId: snapshot.externalOrderId,
+        payload: { id: snapshot.externalOrderId },
+      });
+
+      context.repository.startKitchenTicket(imported.orderId!, "kitchen-1");
+      context.repository.completeKitchenTicket(imported.orderId!, "kitchen-1");
+
+      provider.setSnapshot(
+        createSnapshot("external-apply-added-item", {
+          providerUpdatedAt: "2026-05-11T12:07:00.000Z",
+          items: [
+            {
+              externalItemId: "external-apply-added-item-drink",
+              catalogExternalId: "iced-coffee",
+              name: "Café gelado",
+              quantity: 1,
+              notes: "Sem açúcar",
+              modifiers: [],
+            },
+            {
+              externalItemId: "external-apply-added-item-juice",
+              catalogExternalId: "orange-juice",
+              name: "Suco de laranja",
+              quantity: 1,
+              modifiers: [],
+            },
+            {
+              externalItemId: "external-apply-added-item-bakery",
+              catalogExternalId: "croissant",
+              name: "Croissant",
+              quantity: 1,
+              modifiers: [],
+            },
+          ],
+        }),
+      );
+
+      await service.handleWebhook({
+        provider: "anota_ai",
+        deliveryKey: "delivery-apply-added-item-2",
+        eventType: "order.updated",
+        externalOrderId: snapshot.externalOrderId,
+        payload: { id: snapshot.externalOrderId },
+      });
+
+      const changedException = context.repository
+        .listSyncExceptionsForOrder(imported.orderId!)
+        .find((exception) => exception.kind === "changed_externally");
+
+      if (!changedException) {
+        throw new Error("Expected changed_externally exception before applying");
+      }
+
+      await service.applyChangedException({
+        appliedVia: "manager_apply",
+        exceptionId: changedException.id,
+        orderId: imported.orderId!,
+      });
+
+      const aggregate = context.repository.getOrderAggregate(imported.orderId!);
+      const dashboard = getDashboardData(context.repository);
+      const detail = getOrderDetailData(
+        context.repository,
+        imported.orderId!,
+        "kitchen-1",
+      );
+      const kitchen1Preparing = dashboard.kitchens
+        .find((kitchen) => kitchen.id === "kitchen-1")
+        ?.columns.find((column) => column.status === "in_preparation")
+        ?.tickets.find((ticket) => ticket.orderId === imported.orderId);
+
+      expect(
+        aggregate?.items.map((item) => ({
+          externalItemId: item.externalItemId,
+          kitchenId: item.kitchenId,
+          name: item.name,
+          providerAddedAt: item.providerAddedAt,
+          quantity: item.quantity,
+          status: item.status,
+        })),
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            externalItemId: "external-apply-added-item-drink",
+            kitchenId: "kitchen-1",
+            status: "ready",
+          }),
+          expect.objectContaining({
+            externalItemId: "external-apply-added-item-juice",
+            kitchenId: "kitchen-1",
+            name: "Suco de laranja",
+            providerAddedAt: expect.any(String),
+            quantity: 1,
+            status: "new",
+          }),
+          expect.objectContaining({
+            externalItemId: "external-apply-added-item-bakery",
+            kitchenId: "kitchen-2",
+            status: "new",
+          }),
+        ]),
+      );
+      expect(
+        context.repository
+          .listSyncExceptionsForOrder(imported.orderId!)
+          .find((exception) => exception.id === changedException.id)?.status,
+      ).toBe("resolved");
+      expect(kitchen1Preparing).toEqual(
+        expect.objectContaining({
+          syncExceptionLabel: null,
+          ticketStatus: "in_preparation",
+          orderId: imported.orderId,
+          currentItems: expect.arrayContaining([
+            expect.objectContaining({
+              name: "Suco de laranja",
+              externalStatus: expect.objectContaining({
+                kind: "changed",
+                label: "Adicionado depois",
+              }),
+            }),
+          ]),
+        }),
+      );
+      expect(detail?.focusItems).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "Suco de laranja",
+            externalStatus: expect.objectContaining({
+              kind: "changed",
+              label: "Adicionado depois",
+              detail: "Item incluído no pedido no provedor após a importação.",
+            }),
+          }),
+        ]),
+      );
+    } finally {
+      context.close();
+    }
+  });
+
+  it("keeps removed provider items visible as externally canceled after applying the change", async () => {
+    const snapshot = createSnapshot("external-apply-removed-item");
+    const provider = createMutableSyncProvider([snapshot]);
+    const context = createProductionTestContext();
+    const service = createProviderSyncService({
+      provider,
+      repository: context.repository,
+    });
+
+    try {
+      const imported = await service.handleWebhook({
+        provider: "anota_ai",
+        deliveryKey: "delivery-apply-removed-item-1",
+        eventType: "order.confirmed",
+        externalOrderId: snapshot.externalOrderId,
+        payload: { id: snapshot.externalOrderId },
+      });
+
+      provider.setSnapshot(
+        createSnapshot("external-apply-removed-item", {
+          providerUpdatedAt: "2026-05-11T12:08:00.000Z",
+          items: [
+            {
+              externalItemId: "external-apply-removed-item-bakery",
+              catalogExternalId: "croissant",
+              name: "Croissant",
+              quantity: 1,
+              modifiers: [],
+            },
+          ],
+        }),
+      );
+
+      await service.handleWebhook({
+        provider: "anota_ai",
+        deliveryKey: "delivery-apply-removed-item-2",
+        eventType: "order.updated",
+        externalOrderId: snapshot.externalOrderId,
+        payload: { id: snapshot.externalOrderId },
+      });
+
+      const changedException = context.repository
+        .listSyncExceptionsForOrder(imported.orderId!)
+        .find((exception) => exception.kind === "changed_externally");
+
+      if (!changedException) {
+        throw new Error("Expected changed_externally exception before applying");
+      }
+
+      await service.applyChangedException({
+        appliedVia: "manager_apply",
+        exceptionId: changedException.id,
+        orderId: imported.orderId!,
+      });
+
+      const aggregate = context.repository.getOrderAggregate(imported.orderId!);
+      const detail = getOrderDetailData(
+        context.repository,
+        imported.orderId!,
+        "kitchen-1",
+      );
+      const kitchen1Card = getDashboardData(context.repository).kitchens
+        .find((kitchen) => kitchen.id === "kitchen-1")
+        ?.columns.flatMap((column) => column.tickets)
+        .find((ticket) => ticket.orderId === imported.orderId);
+
+      expect(
+        aggregate?.items.map((item) => ({
+          externalItemId: item.externalItemId,
+          providerRemovedAt: item.providerRemovedAt,
+          status: item.status,
+        })),
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            externalItemId: "external-apply-removed-item-drink",
+            providerRemovedAt: expect.any(String),
+            status: "new",
+          }),
+          expect.objectContaining({
+            externalItemId: "external-apply-removed-item-bakery",
+            providerRemovedAt: null,
+            status: "new",
+          }),
+        ]),
+      );
+      expect(
+        context.repository
+          .listSyncExceptionsForOrder(imported.orderId!)
+          .find((exception) => exception.id === changedException.id)?.status,
+      ).toBe("resolved");
+      expect(kitchen1Card).toEqual(
+        expect.objectContaining({
+          syncExceptionLabel: null,
+          currentItems: [
+            expect.objectContaining({
+              name: "Café gelado",
+              externalStatus: expect.objectContaining({
+                kind: "canceled",
+                label: "Cancelado",
+                detail: "Item removido do pedido no provedor.",
+              }),
+            }),
+          ],
+        }),
+      );
+      expect(detail?.focusItems).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "Café gelado",
+            externalStatus: expect.objectContaining({
+              kind: "canceled",
+              label: "Cancelado",
+            }),
+          }),
+        ]),
       );
     } finally {
       context.close();

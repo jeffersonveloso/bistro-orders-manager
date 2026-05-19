@@ -127,6 +127,7 @@ function isReadyStatusRevertTarget(
 }
 
 export function OrderDetailClient({
+  canAcknowledgeSyncExceptions = false,
   canForceLocalCancel = false,
   focusKitchenId,
   orderId,
@@ -135,6 +136,7 @@ export function OrderDetailClient({
   managedKitchenIds,
   returnTo,
 }: {
+  canAcknowledgeSyncExceptions?: boolean;
   canForceLocalCancel?: boolean;
   focusKitchenId?: KitchenAreaId;
   orderId: string;
@@ -230,11 +232,62 @@ export function OrderDetailClient({
       ]);
     },
   });
+  const acknowledgeSyncExceptionMutation = useMutation({
+    mutationFn: async ({
+      exceptionId,
+      orderId,
+    }: {
+      exceptionId: string;
+      orderId: string;
+    }) =>
+      fetchJson(
+        `/api/orders/${orderId}/sync-exceptions/${exceptionId}/acknowledge`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        },
+      ),
+    onSuccess: async (_, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: boardQueryKey }),
+        queryClient.invalidateQueries({
+          queryKey: [...orderQueryRootKey, variables.orderId],
+        }),
+        queryClient.invalidateQueries({ queryKey: salonQueryKey }),
+      ]);
+    },
+  });
+  const applyChangedSyncExceptionMutation = useMutation({
+    mutationFn: async ({
+      exceptionId,
+      orderId,
+    }: {
+      exceptionId: string;
+      orderId: string;
+    }) =>
+      fetchJson(`/api/orders/${orderId}/sync-exceptions/${exceptionId}/apply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      }),
+    onSuccess: async (_, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: boardQueryKey }),
+        queryClient.invalidateQueries({
+          queryKey: [...orderQueryRootKey, variables.orderId],
+        }),
+        queryClient.invalidateQueries({ queryKey: salonQueryKey }),
+      ]);
+    },
+  });
   const blockingAuthFeedback = getProtectedSurfaceFeedback(orderQuery.error);
   const actionAuthFeedback =
     getProtectedSurfaceFeedback(ticketMutation.error) ??
     getProtectedSurfaceFeedback(itemMutation.error) ??
-    getProtectedSurfaceFeedback(localCancelMutation.error);
+    getProtectedSurfaceFeedback(localCancelMutation.error) ??
+    getProtectedSurfaceFeedback(applyChangedSyncExceptionMutation.error) ??
+    getProtectedSurfaceFeedback(acknowledgeSyncExceptionMutation.error);
 
   const data = orderQuery.data;
   const confirmReadyRevert = () => {
@@ -522,6 +575,48 @@ export function OrderDetailClient({
                 <p className="mt-2 font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--ink-muted)]">
                   Última leitura {formatSyncTime(data.syncException.lastSeenAt)}
                 </p>
+                {canAcknowledgeSyncExceptions &&
+                data.syncException.kind === "changed_externally" &&
+                data.syncException.status !== "resolved" ? (
+                  <div className="mt-3">
+                    <Button
+                      data-testid="order-sync-apply-action"
+                      disabled={applyChangedSyncExceptionMutation.isPending}
+                      onClick={() =>
+                        applyChangedSyncExceptionMutation.mutate({
+                          exceptionId: data.syncException!.id,
+                          orderId,
+                        })
+                      }
+                      size="sm"
+                      type="button"
+                    >
+                      Aplicar alteração
+                    </Button>
+                  </div>
+                ) : canAcknowledgeSyncExceptions &&
+                  data.syncException.status === "open" ? (
+                  <div className="mt-3">
+                    <Button
+                      data-testid="order-sync-acknowledge-action"
+                      disabled={acknowledgeSyncExceptionMutation.isPending}
+                      onClick={() =>
+                        acknowledgeSyncExceptionMutation.mutate({
+                          exceptionId: data.syncException!.id,
+                          orderId,
+                        })
+                      }
+                      size="sm"
+                      type="button"
+                    >
+                      Marcar como ciente
+                    </Button>
+                  </div>
+                ) : data.syncException.status === "open" ? (
+                  <p className="mt-3 font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
+                    Pendência para a gestão
+                  </p>
+                ) : null}
               </div>
             </div>
           </Card>

@@ -43,6 +43,32 @@ function renderClient(element: ReturnType<typeof createElement>) {
   );
 }
 
+function focusDashboardTicketOnVisibleColumn(
+  dashboardData: DashboardData,
+  kitchenId: string,
+  orderId: string,
+) {
+  const kitchenBoard = dashboardData.kitchens.find(
+    (kitchen) => kitchen.id === kitchenId,
+  );
+  const visiblePreparingColumn = kitchenBoard?.columns.find(
+    (column) => column.status === "in_preparation",
+  );
+  const sourceColumn = kitchenBoard?.columns.find((column) =>
+    column.tickets.some((ticket) => ticket.orderId === orderId),
+  );
+  const syncTicket = sourceColumn?.tickets.find((ticket) => ticket.orderId === orderId);
+
+  if (!sourceColumn || !visiblePreparingColumn || !syncTicket) {
+    throw new Error(`Expected visible dashboard sync ticket for ${orderId}`);
+  }
+
+  sourceColumn.tickets = sourceColumn.tickets.filter((ticket) => ticket !== syncTicket);
+  syncTicket.ticketStatus = "in_preparation";
+  syncTicket.ticketStatusLabel = "Em preparo";
+  visiblePreparingColumn.tickets = [syncTicket];
+}
+
 describe("production client contracts", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -322,6 +348,71 @@ describe("production client contracts", () => {
     }
   });
 
+  it("renders a persisted external-added badge on the dashboard and order-detail surfaces", () => {
+    const context = createProductionTestContext({
+      applyDemoScenarios: true,
+      importProviderOrders: true,
+    });
+
+    try {
+      const dashboardData = getDashboardData(context.repository);
+      const orderDetailData = getOrderDetailData(
+        context.repository,
+        "order_anota-101",
+        "kitchen-1",
+      );
+
+      if (!orderDetailData) {
+        throw new Error("Expected order detail data for external-added regression");
+      }
+
+      const dashboardItem =
+        dashboardData.kitchens
+          .flatMap((kitchen) => kitchen.columns)
+          .filter((column) => column.status !== "new" && column.status !== "canceled")
+          .flatMap((column) => column.tickets)
+          .flatMap((ticket) => ticket.currentItems)
+          .find((item) => item.name.length > 0) ?? null;
+
+      if (!dashboardItem) {
+        throw new Error("Expected dashboard item for external-added regression");
+      }
+
+      dashboardItem.externalStatus = {
+        kind: "changed",
+        label: "Adicionado depois",
+        detail: "Item incluído no pedido no provedor após a importação.",
+      };
+      orderDetailData.focusItems[0]!.externalStatus = {
+        kind: "changed",
+        label: "Adicionado depois",
+        detail: "Item incluído no pedido no provedor após a importação.",
+      };
+
+      const dashboardMarkup = renderClient(
+        createElement(DashboardClient, {
+          activeKitchenId: "kitchen-1",
+          initialData: dashboardData,
+        }),
+      );
+      const orderDetailMarkup = renderClient(
+        createElement(OrderDetailClient, {
+          initialData: orderDetailData,
+          kitchenId: "kitchen-1",
+          orderId: "order_anota-101",
+        }),
+      );
+
+      expect(dashboardMarkup).toContain("Adicionado depois");
+      expect(orderDetailMarkup).toContain("Adicionado depois");
+      expect(orderDetailMarkup).toContain(
+        "Item incluído no pedido no provedor após a importação.",
+      );
+    } finally {
+      context.close();
+    }
+  });
+
   it("renders a confirmation dialog for ready-item reversions", () => {
     const markup = renderClient(
       createElement(ReadyStatusRevertDialog, {
@@ -347,34 +438,52 @@ describe("production client contracts", () => {
       applyDemoScenarios: true,
       importProviderOrders: true,
     });
+    const orderId = "order_anota-102";
+    const kitchenId = "kitchen-2";
 
     try {
+      context.repository.openOrRefreshException({
+        provider: "anota_ai",
+        kind: "changed_externally",
+        orderId,
+        externalOrderId: "anota-102",
+        summary: "Pedido Pedido 102 divergiu externamente após a importação",
+        details: {
+          diffs: [{ type: "quantity_changed" }],
+        },
+      });
+
+      const dashboardData = getDashboardData(context.repository);
       const orderDetailData = getOrderDetailData(
         context.repository,
-        "order_anota-101",
-        "kitchen-1",
+        orderId,
+        kitchenId,
       );
 
       if (!orderDetailData) {
         throw new Error("Expected order detail data for manager regression");
       }
 
+      focusDashboardTicketOnVisibleColumn(dashboardData, kitchenId, orderId);
+
       const dashboardMarkup = renderClient(
         createElement(DashboardClient, {
-          activeKitchenId: "kitchen-1",
+          activeKitchenId: kitchenId,
+          canAcknowledgeSyncExceptions: true,
           canForceLocalCancel: true,
-          initialData: getDashboardData(context.repository),
+          initialData: dashboardData,
           managedKitchenIds: ["kitchen-1", "kitchen-2"],
         }),
       );
       const orderDetailMarkup = renderClient(
         createElement(OrderDetailClient, {
+          canAcknowledgeSyncExceptions: true,
           canForceLocalCancel: true,
-          focusKitchenId: "kitchen-1",
+          focusKitchenId: kitchenId,
           initialData: orderDetailData,
-          kitchenId: "kitchen-1",
+          kitchenId,
           managedKitchenIds: ["kitchen-1", "kitchen-2"],
-          orderId: "order_anota-101",
+          orderId,
         }),
       );
       const dialogMarkup = renderClient(
@@ -397,7 +506,9 @@ describe("production client contracts", () => {
       );
 
       expect(dashboardMarkup).toContain("Retirar do fluxo");
+      expect(dashboardMarkup).toContain("Aplicar alteração");
       expect(orderDetailMarkup).toContain('data-testid="order-local-cancel-action"');
+      expect(orderDetailMarkup).toContain('data-testid="order-sync-apply-action"');
       expect(orderDetailMarkup).toContain("Operar esta cozinha");
       expect(dialogMarkup).toContain('data-testid="local-cancel-order-dialog"');
       expect(dialogMarkup).toContain("Motivo obrigatório");
@@ -405,6 +516,60 @@ describe("production client contracts", () => {
       expect(normalizeLocalCancelReason(" cancelado manualmente ")).toBe(
         "cancelado manualmente",
       );
+    } finally {
+      context.close();
+    }
+  });
+
+  it("explains when a sync exception still depends on the gestão on kitchen-only surfaces", () => {
+    const context = createProductionTestContext({
+      applyDemoScenarios: true,
+      importProviderOrders: true,
+    });
+    const orderId = "order_anota-102";
+    const kitchenId = "kitchen-2";
+
+    try {
+      context.repository.openOrRefreshException({
+        provider: "anota_ai",
+        kind: "changed_externally",
+        orderId,
+        externalOrderId: "anota-102",
+        summary: "Pedido Pedido 102 divergiu externamente após a importação",
+        details: {
+          diffs: [{ type: "quantity_changed" }],
+        },
+      });
+
+      const dashboardData = getDashboardData(context.repository);
+      const orderDetailData = getOrderDetailData(
+        context.repository,
+        orderId,
+        kitchenId,
+      );
+
+      if (!orderDetailData) {
+        throw new Error("Expected order detail data for sync guidance regression");
+      }
+
+      focusDashboardTicketOnVisibleColumn(dashboardData, kitchenId, orderId);
+
+      const dashboardMarkup = renderClient(
+        createElement(DashboardClient, {
+          activeKitchenId: kitchenId,
+          initialData: dashboardData,
+        }),
+      );
+      const orderDetailMarkup = renderClient(
+        createElement(OrderDetailClient, {
+          initialData: orderDetailData,
+          kitchenId,
+          orderId,
+        }),
+      );
+
+      expect(dashboardMarkup).toContain("Pendência para a gestão");
+      expect(orderDetailMarkup).toContain("Pendência para a gestão");
     } finally {
       context.close();
     }
@@ -512,6 +677,57 @@ describe("production client contracts", () => {
     expect(markup).toContain("Mesa pronta 2");
   });
 
+  it("keeps the salão surface read-only when sync exceptions are open", () => {
+    const initialData = {
+      generatedAt: "2026-05-13T12:00:00.000Z",
+      metrics: {
+        activeOrders: 1,
+        partiallyReadyOrders: 0,
+        readyToServeOrders: 0,
+      },
+      openSyncExceptions: 1,
+      summary: [
+        {
+          orderId: "order-sync-1",
+          reference: "Pedido 401",
+          customerName: "Mesa 4",
+          waiterName: "Joana",
+          orderStatus: "Em andamento",
+          hasOpenSyncException: true,
+          syncExceptionLabel: "Mudança externa",
+          syncException: {
+            id: "sync-ex-1",
+            provider: "anota_ai" as const,
+            kind: "changed_externally" as const,
+            label: "Mudança externa",
+            status: "open" as const,
+            statusLabel: "Ação pendente",
+            summary: "Pedido divergiu externamente após a importação",
+            detail: "Quantidade alterada no provedor.",
+            orderId: "order-sync-1",
+            externalOrderId: "anota-401",
+            reference: "Pedido 401",
+            customerName: "Mesa 4",
+            waiterName: "Joana",
+            focusKitchenId: "kitchen-1" as const,
+            detectedAt: "2026-05-13T11:55:00.000Z",
+            lastSeenAt: "2026-05-13T11:59:00.000Z",
+          },
+          ticketBreakdown: [],
+        },
+      ],
+    };
+
+    const markup = renderClient(
+      createElement(SalonClient, {
+        initialData,
+      }),
+    );
+
+    expect(markup).toContain("Aguardando gestão");
+    expect(markup).not.toContain("Marcar como ciente");
+  });
+
   it("renders visibility toggles and hides non-operational board sections by default", () => {
     const makeTicket = (index: number, status: "new" | "canceled" = "new") => ({
       orderId: `order-${index}`,
@@ -530,7 +746,10 @@ describe("production client contracts", () => {
       otherKitchenStatus: null,
       otherKitchenName: null,
       hasOpenSyncException: false,
+      syncExceptionId: null,
+      syncExceptionKind: null,
       syncExceptionLabel: null,
+      syncExceptionStatus: null,
       syncExceptionStatusLabel: null,
     });
 
@@ -556,6 +775,7 @@ describe("production client contracts", () => {
       syncAlerts: [
         {
           id: "sync-alert-1",
+          kind: "changed_externally",
           label: "Mudança externa",
           statusLabel: "Ação pendente",
           summary: "O pedido foi alterado no provedor e precisa de conferência.",

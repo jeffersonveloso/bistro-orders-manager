@@ -9,6 +9,7 @@ import type {
 } from "@/src/domain/production";
 import type {
   AcknowledgeExceptionInput,
+  ApplyChangedExceptionInput,
   AcknowledgeSyncExceptionInput,
   FinishSyncRunInput,
   InboundProviderEvent,
@@ -40,6 +41,7 @@ export interface ProviderSyncService {
   handleWebhook(input: WebhookInput): Promise<WebhookProcessResult>;
   reconcileConfirmedOrders(input: ReconcileInput): Promise<SyncRunResult>;
   acknowledgeException(input: AcknowledgeExceptionInput): Promise<void>;
+  applyChangedException(input: ApplyChangedExceptionInput): Promise<void>;
 }
 
 export interface OrderSyncProviderPort {
@@ -91,6 +93,7 @@ export interface ProductionRepository {
   listKitchenMappings(): MenuItemKitchenMapping[];
   listImportedExternalOrderIds(): string[];
   saveImportedOrder(order: SplitOrderResult): void;
+  replaceImportedOrder(order: SplitOrderResult): void;
   listOrderAggregates(): OrderAggregate[];
   getOrderAggregate(orderId: string): OrderAggregate | undefined;
   updateItemStatus(

@@ -4,22 +4,23 @@ import {
   withAreaSession,
 } from "@/app/api/_lib/area-access-route";
 import {
-  createRuntimeAcknowledgeSyncService,
+  createRuntimeProviderSyncService,
   jsonNoStore,
   normalizeOptionalString,
   readJsonObject,
   type ProviderSyncRouteDependencies,
 } from "@/app/api/_lib/provider-sync-route";
 import { AreaAuthorizationError } from "@/src/application/area-access-service";
+import { ApplyChangedExceptionError } from "@/src/application/provider-sync-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-interface AcknowledgeSyncExceptionRouteDependencies
+interface ApplyChangedSyncExceptionRouteDependencies
   extends ProviderSyncRouteDependencies,
     AreaAccessRouteDependencies {}
 
-export async function handlePostAcknowledgeSyncException(
+export async function handlePostApplyChangedSyncException(
   request: Request,
   {
     exceptionId,
@@ -28,7 +29,7 @@ export async function handlePostAcknowledgeSyncException(
     exceptionId: string;
     orderId: string;
   },
-  dependencies: AcknowledgeSyncExceptionRouteDependencies = {},
+  dependencies: ApplyChangedSyncExceptionRouteDependencies = {},
 ) {
   return withAreaSession(
     request,
@@ -57,28 +58,31 @@ export async function handlePostAcknowledgeSyncException(
         return jsonNoStore("Invalid resolutionNote", { status: 400 });
       }
 
-      const service = dependencies.service ?? createRuntimeAcknowledgeSyncService();
+      const service = dependencies.service ?? createRuntimeProviderSyncService();
 
       try {
-        await service.acknowledgeException({
-          acknowledgedVia:
-            elevatedRole === "admin" ? "admin_ui" : "manager_ui",
+        await service.applyChangedException({
+          appliedVia: elevatedRole === "admin" ? "admin_apply" : "manager_apply",
           exceptionId,
           orderId,
           resolutionNote,
         });
       } catch (error) {
-        if (isMissingExceptionError(error)) {
+        if (!(error instanceof ApplyChangedExceptionError)) {
+          throw error;
+        }
+
+        if (error.code === "invalid_exception") {
           return jsonNoStore("Sync exception not found", { status: 404 });
         }
 
-        throw error;
+        return jsonNoStore(error.message, { status: 409 });
       }
 
       return jsonNoStore({
         exceptionId,
         orderId,
-        status: "acknowledged",
+        status: "applied",
       });
     },
     dependencies,
@@ -95,15 +99,8 @@ export async function POST(
 ) {
   const { exceptionId, orderId } = await params;
 
-  return handlePostAcknowledgeSyncException(request, {
+  return handlePostApplyChangedSyncException(request, {
     exceptionId,
     orderId,
   });
-}
-
-function isMissingExceptionError(error: unknown) {
-  return (
-    error instanceof Error &&
-    error.message.startsWith("Sync exception")
-  );
 }

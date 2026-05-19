@@ -8,6 +8,7 @@ import type {
 import type { ProviderOrderSnapshot } from "@/src/domain/provider-sync";
 import type { AreaAccessRuntimeConfig } from "@/src/infrastructure/area-session";
 import { signAreaSession } from "@/src/infrastructure/area-session";
+import type { AreaSession } from "@/src/domain/area-access";
 import { createProductionTestContext } from "@/src/infrastructure/sqlite";
 import {
   handlePostAnotaWebhook,
@@ -18,6 +19,7 @@ import {
   providerSyncSecretHeaders as reconcileSecretHeaders,
 } from "@/app/api/internal/sync/anota-ai/route";
 import { handlePostAcknowledgeSyncException } from "@/app/api/orders/[orderId]/sync-exceptions/[exceptionId]/acknowledge/route";
+import { handlePostApplyChangedSyncException } from "@/app/api/orders/[orderId]/sync-exceptions/[exceptionId]/apply/route";
 
 function createSnapshot(
   externalOrderId: string,
@@ -181,6 +183,7 @@ function createJsonRequest(
 function createRuntimeConfig(): AreaAccessRuntimeConfig {
   return {
     cookieName: "bistro_area_session",
+    elevatedPins: {},
     pins: {
       "kitchen-1": "1111",
       "kitchen-2": "2222",
@@ -199,13 +202,17 @@ function createRuntimeConfig(): AreaAccessRuntimeConfig {
 function createCookieHeader(
   config: AreaAccessRuntimeConfig,
   areaId: "kitchen-1" | "kitchen-2" | "salon",
+  overrides: Partial<AreaSession> = {},
 ) {
   return `${config.cookieName}=${signAreaSession(
     {
+      allowedAreaIds: [areaId],
       areaId,
       expiresAt: "2026-05-13T16:00:00.000Z",
       issuedAt: "2026-05-13T00:00:00.000Z",
+      role: "station",
       version: 1,
+      ...overrides,
     },
     config,
   )}`;
@@ -631,7 +638,7 @@ describe("provider sync routes", () => {
     }
   });
 
-  it("returns 200 when acknowledging an open exception", async () => {
+  it("returns 403 when a salão session tries to acknowledge an open exception", async () => {
     const context = createProductionTestContext({
       importProviderOrders: true,
     });
@@ -656,7 +663,7 @@ describe("provider sync routes", () => {
       const response = await handlePostAcknowledgeSyncException(
         createJsonRequest(
           {
-            resolutionNote: "Atendimento ciente",
+            resolutionNote: "Não deveria passar",
           },
           {
             cookie: createCookieHeader(config, "salon"),
@@ -673,21 +680,17 @@ describe("provider sync routes", () => {
         },
       );
 
-      expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({
-        exceptionId: exception.id,
-        orderId,
-        status: "acknowledged",
-      });
+      expect(response.status).toBe(403);
+      expect(await response.json()).toBe("Forbidden");
       expect(
         context.repository
           .listSyncExceptionsForOrder(orderId)
           .find((entry) => entry.id === exception.id),
       ).toEqual(
         expect.objectContaining({
-          status: "acknowledged",
-          acknowledgedVia: "salon_ui",
-          resolutionNote: "Atendimento ciente",
+          status: "open",
+          acknowledgedVia: null,
+          resolutionNote: null,
         }),
       );
     } finally {
@@ -718,7 +721,10 @@ describe("provider sync routes", () => {
 
     try {
       const requestHeaders = {
-        cookie: createCookieHeader(config, "salon"),
+        cookie: createCookieHeader(config, "kitchen-1", {
+          allowedAreaIds: ["kitchen-1", "kitchen-2", "salon"],
+          role: "manager",
+        }),
       };
       const firstResponse = await handlePostAcknowledgeSyncException(
         createJsonRequest(undefined, requestHeaders),
@@ -817,6 +823,280 @@ describe("provider sync routes", () => {
     }
   });
 
+  it("allows acknowledge attempts from an elevated kitchen session", async () => {
+    const context = createProductionTestContext({
+      importProviderOrders: true,
+    });
+    const config = createRuntimeConfig();
+    const orderId = "order_anota-101";
+    const exception = context.repository.openOrRefreshException({
+      provider: "anota_ai",
+      kind: "changed_externally",
+      orderId,
+      externalOrderId: "anota-101",
+      summary: "Mudança externa detectada",
+      details: {
+        diffs: [{ type: "quantity_changed" }],
+      },
+    });
+    const service = createProviderSyncService({
+      provider: createMutableSyncProvider([]),
+      repository: context.repository,
+    });
+
+    try {
+      const response = await handlePostAcknowledgeSyncException(
+        createJsonRequest(
+          {
+            resolutionNote: "Gerência ciente",
+          },
+          {
+            cookie: createCookieHeader(config, "kitchen-1", {
+              allowedAreaIds: ["kitchen-1", "kitchen-2", "salon"],
+              role: "manager",
+            }),
+          },
+        ),
+        {
+          exceptionId: exception.id,
+          orderId,
+        },
+        {
+          config,
+          now: new Date("2026-05-13T12:00:00.000Z"),
+          service,
+        },
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        exceptionId: exception.id,
+        orderId,
+        status: "acknowledged",
+      });
+      expect(
+        context.repository
+          .listSyncExceptionsForOrder(orderId)
+          .find((entry) => entry.id === exception.id),
+      ).toEqual(
+        expect.objectContaining({
+          status: "acknowledged",
+          acknowledgedVia: "manager_ui",
+          resolutionNote: "Gerência ciente",
+        }),
+      );
+    } finally {
+      context.close();
+    }
+  });
+
+  it("returns 403 when a salão session tries to apply an external change locally", async () => {
+    const context = createProductionTestContext();
+    const config = createRuntimeConfig();
+    const snapshot = createSnapshot("external-apply-forbidden");
+    const provider = createMutableSyncProvider([snapshot]);
+    const service = createProviderSyncService({
+      provider,
+      repository: context.repository,
+    });
+
+    try {
+      const imported = await service.handleWebhook({
+        provider: "anota_ai",
+        deliveryKey: "delivery-apply-forbidden-1",
+        eventType: "order.confirmed",
+        externalOrderId: snapshot.externalOrderId,
+        payload: { id: snapshot.externalOrderId },
+      });
+
+      provider.setSnapshot(
+        createSnapshot("external-apply-forbidden", {
+          providerUpdatedAt: "2026-05-11T12:07:00.000Z",
+          items: [
+            {
+              externalItemId: "external-apply-forbidden-drink",
+              catalogExternalId: "iced-coffee",
+              name: "Café gelado",
+              quantity: 1,
+              modifiers: [],
+            },
+            {
+              externalItemId: "external-apply-forbidden-juice",
+              catalogExternalId: "orange-juice",
+              name: "Suco de laranja",
+              quantity: 1,
+              modifiers: [],
+            },
+            {
+              externalItemId: "external-apply-forbidden-bakery",
+              catalogExternalId: "croissant",
+              name: "Croissant",
+              quantity: 1,
+              modifiers: [],
+            },
+          ],
+        }),
+      );
+
+      await service.handleWebhook({
+        provider: "anota_ai",
+        deliveryKey: "delivery-apply-forbidden-2",
+        eventType: "order.updated",
+        externalOrderId: snapshot.externalOrderId,
+        payload: { id: snapshot.externalOrderId },
+      });
+
+      const changedException = context.repository
+        .listSyncExceptionsForOrder(imported.orderId!)
+        .find((exception) => exception.kind === "changed_externally");
+
+      if (!changedException) {
+        throw new Error("Expected changed_externally exception for apply auth test");
+      }
+
+      const response = await handlePostApplyChangedSyncException(
+        createJsonRequest(undefined, {
+          cookie: createCookieHeader(config, "salon"),
+        }),
+        {
+          exceptionId: changedException.id,
+          orderId: imported.orderId!,
+        },
+        {
+          config,
+          now: new Date("2026-05-13T12:00:00.000Z"),
+          service,
+        },
+      );
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toBe("Forbidden");
+    } finally {
+      context.close();
+    }
+  });
+
+  it("applies a changed_externally snapshot from an elevated kitchen session", async () => {
+    const context = createProductionTestContext();
+    const config = createRuntimeConfig();
+    const snapshot = createSnapshot("external-apply-route");
+    const provider = createMutableSyncProvider([snapshot]);
+    const service = createProviderSyncService({
+      provider,
+      repository: context.repository,
+    });
+
+    try {
+      const imported = await service.handleWebhook({
+        provider: "anota_ai",
+        deliveryKey: "delivery-apply-route-1",
+        eventType: "order.confirmed",
+        externalOrderId: snapshot.externalOrderId,
+        payload: { id: snapshot.externalOrderId },
+      });
+
+      context.repository.startKitchenTicket(imported.orderId!, "kitchen-1");
+      context.repository.completeKitchenTicket(imported.orderId!, "kitchen-1");
+
+      provider.setSnapshot(
+        createSnapshot("external-apply-route", {
+          providerUpdatedAt: "2026-05-11T12:08:00.000Z",
+          items: [
+            {
+              externalItemId: "external-apply-route-drink",
+              catalogExternalId: "iced-coffee",
+              name: "Café gelado",
+              quantity: 1,
+              modifiers: [],
+            },
+            {
+              externalItemId: "external-apply-route-juice",
+              catalogExternalId: "orange-juice",
+              name: "Suco de laranja",
+              quantity: 1,
+              modifiers: [],
+            },
+            {
+              externalItemId: "external-apply-route-bakery",
+              catalogExternalId: "croissant",
+              name: "Croissant",
+              quantity: 1,
+              modifiers: [],
+            },
+          ],
+        }),
+      );
+
+      await service.handleWebhook({
+        provider: "anota_ai",
+        deliveryKey: "delivery-apply-route-2",
+        eventType: "order.updated",
+        externalOrderId: snapshot.externalOrderId,
+        payload: { id: snapshot.externalOrderId },
+      });
+
+      const changedException = context.repository
+        .listSyncExceptionsForOrder(imported.orderId!)
+        .find((exception) => exception.kind === "changed_externally");
+
+      if (!changedException) {
+        throw new Error("Expected changed_externally exception for apply route test");
+      }
+
+      const response = await handlePostApplyChangedSyncException(
+        createJsonRequest(undefined, {
+          cookie: createCookieHeader(config, "kitchen-1", {
+            allowedAreaIds: ["kitchen-1", "kitchen-2", "salon"],
+            role: "manager",
+          }),
+        }),
+        {
+          exceptionId: changedException.id,
+          orderId: imported.orderId!,
+        },
+        {
+          config,
+          now: new Date("2026-05-13T12:00:00.000Z"),
+          service,
+        },
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        exceptionId: changedException.id,
+        orderId: imported.orderId,
+        status: "applied",
+      });
+      expect(
+        context.repository.getOrderAggregate(imported.orderId!)?.items.map((item) => ({
+          externalItemId: item.externalItemId,
+          kitchenId: item.kitchenId,
+          status: item.status,
+        })),
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            externalItemId: "external-apply-route-juice",
+            kitchenId: "kitchen-1",
+            status: "new",
+          }),
+        ]),
+      );
+      expect(
+        context.repository
+          .listSyncExceptionsForOrder(imported.orderId!)
+          .find((exception) => exception.id === changedException.id),
+      ).toEqual(
+        expect.objectContaining({
+          resolvedVia: "manager_apply",
+          status: "resolved",
+        }),
+      );
+    } finally {
+      context.close();
+    }
+  });
+
   it.each([
     {
       cookieHeader: undefined,
@@ -842,7 +1122,7 @@ describe("provider sync routes", () => {
         const response = await handlePostAcknowledgeSyncException(
           createJsonRequest(
             {
-              resolutionNote: "Atendimento ciente",
+              resolutionNote: "Gestão ciente",
             },
             cookieHeader ? { cookie: cookieHeader } : {},
           ),

@@ -133,6 +133,7 @@ function createCatalogRepositorySpy(): CatalogMappingRepository {
 function createSyncService(): ProviderSyncService {
   return {
     acknowledgeException: vi.fn(async () => {}),
+    applyChangedException: vi.fn(async () => {}),
     handleWebhook: vi.fn(async () => ({
       runId: null,
       eventId: null,

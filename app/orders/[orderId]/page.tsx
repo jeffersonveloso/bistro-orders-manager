@@ -88,6 +88,7 @@ export async function loadOrderPage(
   }
 
   return {
+    canAcknowledgeSyncExceptions: hasElevatedAccess,
     canForceLocalCancel: hasElevatedAccess,
     focusKitchenId: initialData.focusKitchenId,
     initialData,
@@ -106,6 +107,7 @@ export default async function OrderPage({
   searchParams: Promise<{ kitchen?: string | string[]; returnTo?: string | string[] }>;
 }) {
   const {
+    canAcknowledgeSyncExceptions,
     canForceLocalCancel,
     focusKitchenId,
     initialData,
@@ -120,6 +122,7 @@ export default async function OrderPage({
 
   return (
     <OrderDetailClient
+      canAcknowledgeSyncExceptions={canAcknowledgeSyncExceptions}
       canForceLocalCancel={canForceLocalCancel}
       focusKitchenId={focusKitchenId}
       initialData={initialData}

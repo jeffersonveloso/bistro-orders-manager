@@ -100,6 +100,8 @@ export function splitProviderOrder(
       notes: item.notes ?? null,
       kitchenId: mapping.kitchenId,
       status: "new",
+      providerAddedAt: null,
+      providerRemovedAt: null,
       createdAt: timestamp,
       updatedAt: timestamp,
     };

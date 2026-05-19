@@ -1,31 +1,19 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  CheckCheck,
-  Eye,
-  EyeOff,
-  ReceiptText,
-  TriangleAlert,
-  UserRound,
-} from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Eye, EyeOff, ReceiptText, TriangleAlert, UserRound } from "lucide-react";
 import { useState } from "react";
 
 import type { SalonData } from "@/src/application/production-service";
 import { AreaSwitchButton } from "@/src/components/kds/area-switch-button";
 import {
   getProtectedSurfaceFeedback,
-  getSalonInvalidationKeys,
   getSalonQueryOptions,
 } from "@/src/components/kds/production-client-contracts";
-import {
-  ProtectedSurfaceBanner,
-  ProtectedSurfaceFallback,
-} from "@/src/components/kds/protected-surface-feedback";
+import { ProtectedSurfaceFallback } from "@/src/components/kds/protected-surface-feedback";
 import { Button } from "@/src/components/ui/button";
 import { Card } from "@/src/components/ui/card";
 import { ScrollArea } from "@/src/components/ui/scroll-area";
-import { fetchJson } from "@/src/lib/fetch-json";
 import { formatOperationalTime } from "@/src/lib/utils";
 
 const maxSalonOrdersPerSection = 15;
@@ -113,12 +101,8 @@ function getSalonLanePresentation(lane: SalonLaneKey) {
 }
 
 function SalonOrderCard({
-  busy,
-  onAcknowledge,
   order,
 }: {
-  busy: boolean;
-  onAcknowledge: (orderId: string, exceptionId: string) => void;
   order: SalonOrder;
 }) {
   const status = getSalonStatusPresentation(order.orderStatus);
@@ -200,20 +184,12 @@ function SalonOrderCard({
             </div>
 
             {order.syncException.status === "open" ? (
-              <Button
-                data-testid={`salon-acknowledge-${order.orderId}`}
-                disabled={busy}
-                onClick={() =>
-                  onAcknowledge(order.orderId, order.syncException!.id)
-                }
-                size="sm"
-              >
-                <CheckCheck className="size-4" />
-                Marcar como ciente
-              </Button>
+              <div className="rounded-full border border-[color-mix(in_oklab,var(--accent-warm)_40%,white)] bg-[color-mix(in_oklab,var(--accent-warm)_12%,white)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-[color-mix(in_oklab,var(--accent-warm)_82%,black)]">
+                Aguardando gestão
+              </div>
             ) : (
               <div className="rounded-full border border-[color-mix(in_oklab,var(--accent-ready)_40%,white)] bg-[color-mix(in_oklab,var(--accent-ready)_12%,white)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-[var(--accent-ready)]">
-                Salão ciente, aguardando reconciliação
+                {order.syncException.statusLabel}, aguardando reconciliação
               </div>
             )}
           </div>
@@ -224,44 +200,11 @@ function SalonOrderCard({
 }
 
 export function SalonClient({ initialData }: { initialData?: SalonData }) {
-  const queryClient = useQueryClient();
-  const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
   const [expandedSections, setExpandedSections] = useState<
     Partial<Record<SalonLaneKey, boolean>>
   >({});
   const salonQuery = useQuery(getSalonQueryOptions(initialData));
-  const acknowledgeMutation = useMutation({
-    mutationFn: async ({
-      orderId,
-      exceptionId,
-    }: {
-      orderId: string;
-      exceptionId: string;
-    }) => {
-      setBusyOrderId(orderId);
-
-      return fetchJson(
-        `/api/orders/${orderId}/sync-exceptions/${exceptionId}/acknowledge`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({}),
-        },
-      );
-    },
-    onSuccess: async () => {
-      await Promise.all(
-        getSalonInvalidationKeys().map((queryKey) =>
-          queryClient.invalidateQueries({ queryKey }),
-        ),
-      );
-    },
-    onSettled: () => {
-      setBusyOrderId(null);
-    },
-  });
   const blockingAuthFeedback = getProtectedSurfaceFeedback(salonQuery.error);
-  const actionAuthFeedback = getProtectedSurfaceFeedback(acknowledgeMutation.error);
 
   if (salonQuery.isLoading) {
     return (
@@ -352,10 +295,6 @@ export function SalonClient({ initialData }: { initialData?: SalonData }) {
           </div>
         </header>
 
-        {actionAuthFeedback ? (
-          <ProtectedSurfaceBanner feedback={actionAuthFeedback} />
-        ) : null}
-
         <section className="grid gap-5 xl:grid-cols-2">
           {laneSections.map((section) => (
             <Card
@@ -425,14 +364,7 @@ export function SalonClient({ initialData }: { initialData?: SalonData }) {
                   ) : (
                     section.orders.map((order) => (
                       <SalonOrderCard
-                        busy={busyOrderId === order.orderId}
                         key={order.orderId}
-                        onAcknowledge={(orderId, exceptionId) =>
-                          acknowledgeMutation.mutate({
-                            orderId,
-                            exceptionId,
-                          })
-                        }
                         order={order}
                       />
                     ))

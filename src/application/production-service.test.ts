@@ -40,6 +40,8 @@ function createAggregate(orderId = "order_sync"): OrderAggregate {
         notes: null,
         kitchenId: "kitchen-1",
         status: "new",
+        providerAddedAt: null,
+        providerRemovedAt: null,
         createdAt: "2026-05-11T12:00:00.000Z",
         updatedAt: "2026-05-11T12:00:00.000Z",
       },
@@ -53,6 +55,8 @@ function createAggregate(orderId = "order_sync"): OrderAggregate {
         notes: null,
         kitchenId: "kitchen-2",
         status: "new",
+        providerAddedAt: null,
+        providerRemovedAt: null,
         createdAt: "2026-05-11T12:00:00.000Z",
         updatedAt: "2026-05-11T12:00:00.000Z",
       },
@@ -130,6 +134,7 @@ function createReadModelRepository({
       return [];
     },
     saveImportedOrder() {},
+    replaceImportedOrder() {},
     listOrderAggregates() {
       return [aggregate];
     },
@@ -449,7 +454,7 @@ describe("production demo scenarios", () => {
     try {
       context.repository.acknowledgeException({
         acknowledgedAt: "2026-05-11T12:05:00.000Z",
-        acknowledgedVia: "salon_ui",
+        acknowledgedVia: "manager_ui",
         exceptionId: exception.id,
         orderId,
       });
@@ -462,7 +467,7 @@ describe("production demo scenarios", () => {
           kind: "changed_externally",
           status: "acknowledged",
           label: "Mudança externa",
-          statusLabel: "Salão ciente",
+          statusLabel: "Gestão ciente",
           summary: "Pedido 101 divergiu externamente após a importação",
         }),
       );
@@ -470,8 +475,8 @@ describe("production demo scenarios", () => {
         expect.arrayContaining([
           expect.objectContaining({
             event: "acknowledged",
-            label: "Salão ciente",
-            actor: "Salão",
+            label: "Gestão ciente",
+            actor: "Gerência",
           }),
           expect.objectContaining({
             event: "detected",
@@ -530,6 +535,49 @@ describe("production demo scenarios", () => {
             externalStatus: expect.objectContaining({
               kind: "canceled",
               label: "Cancelado",
+            }),
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("marks provider-added items as changed in the operational projection after the apply flow resolves", () => {
+    const aggregate = createAggregate();
+    aggregate.items[0]!.providerAddedAt = "2026-05-11T12:08:00.000Z";
+    const repository = createReadModelRepository({
+      aggregate,
+    });
+
+    const dashboard = getDashboardData(repository);
+    const detail = getOrderDetailData(repository, "order_sync", "kitchen-1");
+    const kitchen1Card = dashboard.kitchens
+      .find((kitchen) => kitchen.id === "kitchen-1")
+      ?.columns.flatMap((column) => column.tickets)
+      .find((ticket) => ticket.orderId === "order_sync");
+
+    expect(kitchen1Card).toEqual(
+      expect.objectContaining({
+        currentItems: [
+          expect.objectContaining({
+            name: "Café gelado",
+            externalStatus: expect.objectContaining({
+              kind: "changed",
+              label: "Adicionado depois",
+              detail: "Item incluído no pedido no provedor após a importação.",
+            }),
+          }),
+        ],
+      }),
+    );
+    expect(detail).toEqual(
+      expect.objectContaining({
+        focusItems: [
+          expect.objectContaining({
+            name: "Café gelado",
+            externalStatus: expect.objectContaining({
+              kind: "changed",
+              label: "Adicionado depois",
             }),
           }),
         ],
@@ -612,7 +660,7 @@ describe("production demo scenarios", () => {
 
     try {
       context.repository.acknowledgeException({
-        acknowledgedVia: "salon_ui",
+        acknowledgedVia: "manager_ui",
         exceptionId: exception.id,
         orderId,
       });
@@ -628,7 +676,7 @@ describe("production demo scenarios", () => {
           syncExceptionLabel: "Mudança externa",
           syncException: expect.objectContaining({
             status: "acknowledged",
-            statusLabel: "Salão ciente",
+            statusLabel: "Gestão ciente",
           }),
         }),
       );
@@ -666,6 +714,7 @@ describe("production demo scenarios", () => {
         return [];
       },
       saveImportedOrder() {},
+      replaceImportedOrder() {},
       listOrderAggregates() {
         return [aggregate];
       },
@@ -1011,6 +1060,7 @@ describe("production demo scenarios", () => {
         return [];
       },
       saveImportedOrder() {},
+      replaceImportedOrder() {},
       listOrderAggregates() {
         return [];
       },

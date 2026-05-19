@@ -391,11 +391,13 @@ function ExternalItemStatusPill({
 
 export function DashboardClient({
   activeKitchenId,
+  canAcknowledgeSyncExceptions = false,
   canForceLocalCancel = false,
   initialData,
   managedKitchenIds = [activeKitchenId],
 }: {
   activeKitchenId: KitchenAreaId;
+  canAcknowledgeSyncExceptions?: boolean;
   canForceLocalCancel?: boolean;
   initialData?: DashboardData;
   managedKitchenIds?: readonly KitchenAreaId[];
@@ -590,10 +592,61 @@ export function DashboardClient({
       ]);
     },
   });
+  const acknowledgeSyncExceptionMutation = useMutation({
+    mutationFn: async ({
+      exceptionId,
+      orderId,
+    }: {
+      exceptionId: string;
+      orderId: string;
+    }) =>
+      fetchJson(
+        `/api/orders/${orderId}/sync-exceptions/${exceptionId}/acknowledge`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        },
+      ),
+    onSuccess: async (_, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: boardQueryKey }),
+        queryClient.invalidateQueries({
+          queryKey: [...orderQueryRootKey, variables.orderId],
+        }),
+        queryClient.invalidateQueries({ queryKey: salonQueryKey }),
+      ]);
+    },
+  });
+  const applyChangedSyncExceptionMutation = useMutation({
+    mutationFn: async ({
+      exceptionId,
+      orderId,
+    }: {
+      exceptionId: string;
+      orderId: string;
+    }) =>
+      fetchJson(`/api/orders/${orderId}/sync-exceptions/${exceptionId}/apply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      }),
+    onSuccess: async (_, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: boardQueryKey }),
+        queryClient.invalidateQueries({
+          queryKey: [...orderQueryRootKey, variables.orderId],
+        }),
+        queryClient.invalidateQueries({ queryKey: salonQueryKey }),
+      ]);
+    },
+  });
   const blockingAuthFeedback = getProtectedSurfaceFeedback(boardQuery.error);
   const actionAuthFeedback =
     getProtectedSurfaceFeedback(ticketMutation.error) ??
-    getProtectedSurfaceFeedback(localCancelMutation.error);
+    getProtectedSurfaceFeedback(localCancelMutation.error) ??
+    getProtectedSurfaceFeedback(applyChangedSyncExceptionMutation.error) ??
+    getProtectedSurfaceFeedback(acknowledgeSyncExceptionMutation.error);
 
   useEffect(() => {
     const applyDashboardPreferences = (preferences: DashboardPreferences | null) => {
@@ -1445,6 +1498,57 @@ export function DashboardClient({
                                             {ticket.syncExceptionStatusLabel}
                                           </p>
                                         ) : null}
+                                        {canAcknowledgeSyncExceptions &&
+                                        ticket.syncExceptionId &&
+                                        ticket.syncExceptionKind === "changed_externally" &&
+                                        ticket.syncExceptionStatus !== "resolved" ? (
+                                          <div className="mt-3">
+                                            <Button
+                                              data-testid={`ticket-sync-apply-${ticket.ticketId}`}
+                                              disabled={
+                                                applyChangedSyncExceptionMutation.isPending
+                                              }
+                                              onClick={(event) => {
+                                                event.stopPropagation();
+                                                applyChangedSyncExceptionMutation.mutate({
+                                                  exceptionId: ticket.syncExceptionId!,
+                                                  orderId: ticket.orderId,
+                                                });
+                                              }}
+                                              size="sm"
+                                              type="button"
+                                            >
+                                              Aplicar alteração
+                                            </Button>
+                                          </div>
+                                        ) : canAcknowledgeSyncExceptions &&
+                                          ticket.syncExceptionId &&
+                                          ticket.syncExceptionStatus === "open" ? (
+                                          <div className="mt-3">
+                                            <Button
+                                              data-testid={`ticket-sync-acknowledge-${ticket.ticketId}`}
+                                              disabled={
+                                                acknowledgeSyncExceptionMutation.isPending
+                                              }
+                                              onClick={(event) => {
+                                                event.stopPropagation();
+                                                acknowledgeSyncExceptionMutation.mutate({
+                                                  exceptionId: ticket.syncExceptionId!,
+                                                  orderId: ticket.orderId,
+                                                });
+                                              }}
+                                              size="sm"
+                                              type="button"
+                                              variant="secondary"
+                                            >
+                                              Marcar como ciente
+                                            </Button>
+                                          </div>
+                                        ) : ticket.syncExceptionStatus === "open" ? (
+                                          <p className="mt-3 font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
+                                            Pendência para a gestão
+                                          </p>
+                                        ) : null}
                                       </div>
                                     </div>
                                   ) : null}
@@ -1749,6 +1853,50 @@ export function DashboardClient({
                   {alert.detail ? (
                     <p className="mt-2 text-xs uppercase tracking-[0.18em] text-[var(--ink-muted)]">
                       {alert.detail}
+                    </p>
+                  ) : null}
+                  {canAcknowledgeSyncExceptions &&
+                  alert.orderId &&
+                  alert.kind === "changed_externally" &&
+                  alert.status !== "resolved" ? (
+                    <div className="mt-4">
+                      <Button
+                        data-testid={`sync-alert-apply-${alert.id}`}
+                        disabled={applyChangedSyncExceptionMutation.isPending}
+                        onClick={() =>
+                          applyChangedSyncExceptionMutation.mutate({
+                            exceptionId: alert.id,
+                            orderId: alert.orderId!,
+                          })
+                        }
+                        size="sm"
+                        type="button"
+                      >
+                        Aplicar alteração
+                      </Button>
+                    </div>
+                  ) : canAcknowledgeSyncExceptions &&
+                    alert.orderId &&
+                    alert.status === "open" ? (
+                    <div className="mt-4">
+                      <Button
+                        data-testid={`sync-alert-acknowledge-${alert.id}`}
+                        disabled={acknowledgeSyncExceptionMutation.isPending}
+                        onClick={() =>
+                          acknowledgeSyncExceptionMutation.mutate({
+                            exceptionId: alert.id,
+                            orderId: alert.orderId!,
+                          })
+                        }
+                        size="sm"
+                        type="button"
+                      >
+                        Marcar como ciente
+                      </Button>
+                    </div>
+                  ) : alert.status === "open" ? (
+                    <p className="mt-4 font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--ink-muted)]">
+                      Marque como ciente com a gestão
                     </p>
                   ) : null}
                   {hasAuthorizedOrderAccess(

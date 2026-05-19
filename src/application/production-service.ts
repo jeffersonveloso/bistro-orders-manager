@@ -74,6 +74,7 @@ export interface LocalCancellationPresentation {
 
 export interface SyncAlert {
   id: string;
+  kind: SyncExceptionKind;
   label: string;
   statusLabel: string;
   summary: string;
@@ -112,9 +113,11 @@ const SYNC_EXCEPTION_LABELS: Record<SyncExceptionKind, string> = {
   ingestion_failed: "Falha de sincronização",
 };
 
-const SYNC_EXCEPTION_STATUS_LABELS: Record<SyncExceptionStatus, string> = {
+const SYNC_EXCEPTION_STATUS_LABELS: Record<
+  Exclude<SyncExceptionStatus, "acknowledged">,
+  string
+> = {
   open: "Ação pendente",
-  acknowledged: "Salão ciente",
   resolved: "Resolvida",
 };
 
@@ -167,7 +170,10 @@ export interface BoardTicketCard {
   otherKitchenName: string | null;
   localCancellation: LocalCancellationPresentation | null;
   hasOpenSyncException: boolean;
+  syncExceptionId: string | null;
+  syncExceptionKind: SyncExceptionKind | null;
   syncExceptionLabel: string | null;
+  syncExceptionStatus: SyncExceptionStatus | null;
   syncExceptionStatusLabel: string | null;
 }
 
@@ -422,6 +428,14 @@ function humanizeExceptionActor(value: string | null) {
   switch (value) {
     case "salon_ui":
       return "Salão";
+    case "manager_ui":
+      return "Gerência";
+    case "admin_ui":
+      return "Administração";
+    case "manager_apply":
+      return "Gerência";
+    case "admin_apply":
+      return "Administração";
     case "sync_apply_success":
       return "Replay aplicado";
     case "snapshot_reconciled":
@@ -432,6 +446,18 @@ function humanizeExceptionActor(value: string | null) {
       return "Estado substituído";
     default:
       return value;
+  }
+}
+
+function getAcknowledgedStatusLabel(acknowledgedVia: string | null) {
+  switch (acknowledgedVia) {
+    case "salon_ui":
+      return "Salão ciente";
+    case "manager_ui":
+    case "admin_ui":
+      return "Gestão ciente";
+    default:
+      return "Ciente";
   }
 }
 
@@ -495,7 +521,10 @@ function toSyncExceptionPresentation(
     kind: exception.kind,
     status: exception.status,
     label: SYNC_EXCEPTION_LABELS[exception.kind],
-    statusLabel: SYNC_EXCEPTION_STATUS_LABELS[exception.status],
+    statusLabel:
+      exception.status === "acknowledged"
+        ? getAcknowledgedStatusLabel(exception.acknowledgedVia)
+        : SYNC_EXCEPTION_STATUS_LABELS[exception.status],
     summary: normalizeSyncSummary(exception.summary),
     detail: describeSyncExceptionDetail(exception),
     orderId: exception.orderId,
@@ -532,7 +561,7 @@ function buildSyncTrail(exceptions: SyncExceptionRecord[]) {
           id: `${exception.id}:acknowledged`,
           exceptionId: exception.id,
           event: "acknowledged",
-          label: "Salão ciente",
+          label: getAcknowledgedStatusLabel(exception.acknowledgedVia),
           summary:
             exception.resolutionNote ??
             "A exceção segue visível até replay ou reconciliação.",
@@ -567,6 +596,25 @@ function buildItemExternalStatuses(
   aggregate: OrderAggregate,
 ) {
   const statuses = new Map<string, ExternalItemStatusPresentation>();
+
+  for (const item of aggregate.items) {
+    if (item.providerRemovedAt) {
+      statuses.set(item.id, {
+        kind: "canceled",
+        label: "Cancelado",
+        detail: "Item removido do pedido no provedor.",
+      });
+      continue;
+    }
+
+    if (item.providerAddedAt) {
+      statuses.set(item.id, {
+        kind: "changed",
+        label: "Adicionado depois",
+        detail: "Item incluído no pedido no provedor após a importação.",
+      });
+    }
+  }
 
   if (!exception) {
     return statuses;
@@ -679,6 +727,12 @@ function toExternalItemStatusPresentation(
   diff: Record<string, unknown>,
 ): ExternalItemStatusPresentation | null {
   switch (type) {
+    case "item_added":
+      return {
+        kind: "changed",
+        label: "Adicionado depois",
+        detail: "Item incluído no pedido no provedor após a importação.",
+      };
     case "item_removed":
       return {
         kind: "canceled",
@@ -1040,6 +1094,7 @@ function buildSyncAlerts(context: ProductionReadContext): SyncAlert[] {
 
     return {
       id: exception.id,
+      kind: presentation.kind,
       label: presentation.label,
       statusLabel: presentation.statusLabel,
       summary: presentation.summary,
@@ -1189,7 +1244,10 @@ export function getDashboardData(repository: ProductionRepository): DashboardDat
                   )?.name ?? null
                 : null,
               hasOpenSyncException: Boolean(syncPresentation),
+              syncExceptionId: syncPresentation?.id ?? null,
+              syncExceptionKind: syncPresentation?.kind ?? null,
               syncExceptionLabel: syncPresentation?.label ?? null,
+              syncExceptionStatus: syncPresentation?.status ?? null,
               syncExceptionStatusLabel: syncPresentation?.statusLabel ?? null,
             };
           })(),

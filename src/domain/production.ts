@@ -102,6 +102,8 @@ export interface OrderItemRecord {
   notes: string | null;
   kitchenId: KitchenId;
   status: ItemStatus;
+  providerAddedAt: string | null;
+  providerRemovedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }

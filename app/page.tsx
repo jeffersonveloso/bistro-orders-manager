@@ -23,6 +23,7 @@ export async function loadHomePage(dependencies: HomePageDependencies = {}) {
 
   return {
     activeKitchenId: kitchenId,
+    canAcknowledgeSyncExceptions: hasElevatedAccess,
     canForceLocalCancel: hasElevatedAccess,
     initialData: getDashboardData(
       dependencies.repository ?? getProductionRepository(),
@@ -32,12 +33,18 @@ export async function loadHomePage(dependencies: HomePageDependencies = {}) {
 }
 
 export default async function Home() {
-  const { activeKitchenId, canForceLocalCancel, initialData, managedKitchenIds } =
-    await loadHomePage();
+  const {
+    activeKitchenId,
+    canAcknowledgeSyncExceptions,
+    canForceLocalCancel,
+    initialData,
+    managedKitchenIds,
+  } = await loadHomePage();
 
   return (
     <DashboardClient
       activeKitchenId={activeKitchenId}
+      canAcknowledgeSyncExceptions={canAcknowledgeSyncExceptions}
       canForceLocalCancel={canForceLocalCancel}
       initialData={initialData}
       managedKitchenIds={managedKitchenIds}
